@@ -3,7 +3,7 @@ const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload, uploadDir } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
 
 const router = express.Router();
@@ -269,7 +269,7 @@ router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next)
 
     const store = await (await col('stores')).findOne({ id: visit.store_id });
     const photos = JSON.parse(visit.photos_json || '[]');
-    const photoUrl = `/uploads/${req.file.filename}`;
+    const photoUrl = await saveFileToGridFS(req.file);
     const caption = req.body?.caption || 'Foto da visita';
     photos.push({ url: photoUrl, caption, created_at: new Date().toISOString() });
     await visitsCol.updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });

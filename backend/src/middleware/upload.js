@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const multer = require('multer');
+const { getGridFSBucket } = require('../db/database');
 
 const uploadDir = process.env.VERCEL
   ? '/tmp/merchandising_uploads'
@@ -23,4 +24,21 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-module.exports = { upload, uploadDir };
+async function saveFileToGridFS(file) {
+  if (!file || !file.path) return '';
+  try {
+    const bucket = await getGridFSBucket();
+    await new Promise((resolve, reject) => {
+      const readStream = fs.createReadStream(file.path);
+      const uploadStream = bucket.openUploadStream(file.filename, {
+        contentType: file.mimetype || 'image/jpeg',
+      });
+      readStream.pipe(uploadStream).on('finish', resolve).on('error', reject);
+    });
+  } catch (err) {
+    console.error('GridFS upload error:', err.message);
+  }
+  return `/uploads/${file.filename}`;
+}
+
+module.exports = { upload, uploadDir, saveFileToGridFS };

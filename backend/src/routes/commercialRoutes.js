@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload, uploadDir } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
 const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
 
@@ -55,7 +55,7 @@ router.post('/prices', upload.single('photo'), async (req, res, next) => {
     const gPrice = gondola_price !== '' && gondola_price !== undefined && gondola_price !== null ? Number(gondola_price) : null;
     const tagPresent = has_price_tag === 'false' || has_price_tag === false || has_price_tag === '0' ? 0 : 1;
     const divergent = tagPresent === 0 || (gPrice !== null && Math.abs(gPrice - sysPrice) > 0.01) ? 1 : 0;
-    const photoUrl = req.file ? `/uploads/${req.file.filename}` : '';
+    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
 
     const id = await nextId('price_checks');
     await (await col('price_checks')).insertOne({
@@ -311,7 +311,7 @@ router.post('/campaigns/:id/execute', upload.single('photo'), async (req, res, n
     const { store_id, visit_id, compliant, checklist_status, notes } = req.body || {};
     if (!store_id) return res.status(400).json({ error: 'Loja é obrigatória.' });
 
-    const photoUrl = req.file ? `/uploads/${req.file.filename}` : '';
+    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
     const id = await nextId('campaign_executions');
     await (await col('campaign_executions')).insertOne({
       id,
@@ -381,7 +381,7 @@ router.post('/occurrences', upload.single('photo'), async (req, res, next) => {
     const { visit_id, store_id, product_id, type, priority, description } = req.body || {};
     if (!store_id || !type || !description) return res.status(400).json({ error: 'Loja, tipo e descrição são obrigatórios.' });
 
-    const photoUrl = req.file ? `/uploads/${req.file.filename}` : '';
+    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
     const id = await nextId('occurrences');
     await (await col('occurrences')).insertOne({
       id,
@@ -451,7 +451,7 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
   try {
     const { store_id, visit_id, notes } = req.body || {};
     const imagePath = req.file ? path.join(uploadDir, req.file.filename) : null;
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : '';
+    const imageUrl = req.file ? await saveFileToGridFS(req.file) : '';
 
     const result = await analyzeShelfImage({ storeId: store_id, visitId: visit_id, imagePath, notes });
     const id = await nextId('ai_analyses');

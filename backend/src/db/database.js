@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { MongoClient } = require('mongodb');
+const { MongoClient, GridFSBucket } = require('mongodb');
 
 let cachedClient = null;
 let cachedDb = null;
@@ -60,6 +60,11 @@ async function nextId(name) {
   return result.seq;
 }
 
+async function getGridFSBucket() {
+  const db = await connectDb();
+  return new GridFSBucket(db, { bucketName: 'uploads' });
+}
+
 module.exports = {
   connectDb,
   col,
@@ -67,4 +72,5 @@ module.exports = {
   nowStr,
   hashPassword,
   verifyPassword,
+  getGridFSBucket,
 };

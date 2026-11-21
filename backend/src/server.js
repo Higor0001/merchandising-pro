@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('node:path');
 const fs = require('node:fs');
 const { seedIfEmpty } = require('./db/seed');
+const { getGridFSBucket } = require('./db/database');
 const { uploadDir } = require('./middleware/upload');
 
 const authRoutes = require('./routes/auth');
@@ -15,7 +16,25 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
-app.use('/uploads', express.static(uploadDir));
+app.get('/uploads/:filename', async (req, res) => {
+  const safeName = path.basename(req.params.filename);
+  const localPath = path.join(uploadDir, safeName);
+  if (fs.existsSync(localPath)) {
+    return res.sendFile(localPath);
+  }
+  try {
+    const bucket = await getGridFSBucket();
+    const files = await bucket.find({ filename: safeName }).limit(1).toArray();
+    if (!files.length) {
+      return res.status(404).json({ error: 'Imagem não encontrada.' });
+    }
+    res.setHeader('Content-Type', files[0].contentType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    bucket.openDownloadStream(files[0]._id).pipe(res);
+  } catch {
+    res.status(404).json({ error: 'Imagem não encontrada.' });
+  }
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({

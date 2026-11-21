@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload, uploadDir } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
 const { searchSi5Products, getSi5ProductByBarcode } = require('../services/si5Service');
 
@@ -225,8 +225,8 @@ router.post(
       }
       const beforeFile = req.files?.photo_before?.[0];
       const afterFile = req.files?.photo_after?.[0];
-      const photoBefore = beforeFile ? `/uploads/${beforeFile.filename}` : '';
-      const photoAfter = afterFile ? `/uploads/${afterFile.filename}` : '';
+      const photoBefore = beforeFile ? await saveFileToGridFS(beforeFile) : '';
+      const photoAfter = afterFile ? await saveFileToGridFS(afterFile) : '';
 
       const id = await nextId('displays_exposures');
       await (await col('displays_exposures')).insertOne({
