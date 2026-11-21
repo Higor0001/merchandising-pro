@@ -14,7 +14,7 @@ export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'conco
     gondola_price: '',
     promo_price: '',
     has_price_tag: true,
-    competitor_name: 'Concorrente Alpha',
+    competitor_name: '',
     competitor_price: '',
     notes: '',
   });

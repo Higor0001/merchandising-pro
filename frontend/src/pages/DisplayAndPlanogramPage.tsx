@@ -14,7 +14,7 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
   const [photoAfter, setPhotoAfter] = useState<File | null>(null);
   const [displayForm, setDisplayForm] = useState({
     store_id: '',
-    category: 'Mercearia',
+    category: 'Salgadinhos',
     brand_id: '',
     exposure_type: mode === 'pontos-extras' ? 'Ponto Extra' : 'Gôndola',
     facings_actual: '6',
@@ -26,7 +26,7 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
 
   const [planForm, setPlanForm] = useState({
     store_id: '',
-    category: 'Mercearia',
+    category: 'Salgadinhos',
     brand_id: '',
     product_id: '',
     ideal_facings: '6',

@@ -29,7 +29,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
   const [previewTitle, setPreviewTitle] = useState('');
 
   const [newBrand, setNewBrand] = useState({ name: '', is_own: true });
-  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '1', category: 'Mercearia', system_price: '10.00' });
+  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '1', category: 'Salgadinhos', system_price: '' });
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
 
   const loadConfig = async () => {
@@ -165,7 +165,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
             onSubmit={async (e) => {
               e.preventDefault();
               await apiFetch('/products', { method: 'POST', body: JSON.stringify({ ...newProd, brand_id: Number(newProd.brand_id), system_price: Number(newProd.system_price) }) });
-              setNewProd({ sku: '', ean: '', name: '', brand_id: '1', category: 'Mercearia', system_price: '10.00' });
+              setNewProd({ sku: '', ean: '', name: '', brand_id: '1', category: 'Salgadinhos', system_price: '' });
               loadConfig();
             }}
             className="grid grid-cols-2 gap-2"

@@ -53,7 +53,7 @@ function analyzeShelfImage({ storeId, visitId, imagePath, notes }) {
     confidence: Number((baseConfidence - idx * 2.1).toFixed(1)),
   }));
   detectedBrands.push({
-    brand: 'Concorrente Alpha',
+    brand: 'Concorrente na Categoria',
     facings: 5 + (fileSizeKb % 4),
     confidence: Number((baseConfidence - 4.5).toFixed(1)),
   });
