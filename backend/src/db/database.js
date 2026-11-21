@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
-const dbDir = path.join(__dirname, '..', '..', 'data');
+const dbDir = process.env.VERCEL
+  ? '/tmp/merchandising_data'
+  : path.join(__dirname, '..', '..', 'data');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
