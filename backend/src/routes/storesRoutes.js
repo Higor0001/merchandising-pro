@@ -2,7 +2,9 @@ const express = require('express');
 const { db } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload } = require('../middleware/upload');
+const { upload, uploadDir } = require('../middleware/upload');
+const { sendPhotoToTelegram } = require('../services/telegramService');
+const path = require('node:path');
 
 const router = express.Router();
 router.use(authenticate);
@@ -183,16 +185,28 @@ router.post('/visits/:id/checkout', (req, res) => {
   res.json(db.prepare('SELECT * FROM visits WHERE id = ?').get(id));
 });
 
-router.post('/visits/:id/photos', upload.single('photo'), (req, res) => {
+router.post('/visits/:id/photos', upload.single('photo'), async (req, res) => {
   const { id } = req.params;
-  const visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(id);
+  const visit = db.prepare(`
+    SELECT v.*, s.name as store_name FROM visits v JOIN stores s ON s.id = v.store_id WHERE v.id = ?
+  `).get(id);
   if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
   if (!req.file) return res.status(400).json({ error: 'Nenhuma foto enviada.' });
 
   const photos = JSON.parse(visit.photos_json || '[]');
   const photoUrl = `/uploads/${req.file.filename}`;
-  photos.push({ url: photoUrl, caption: req.body?.caption || 'Foto da visita', created_at: new Date().toISOString() });
+  const caption = req.body?.caption || 'Foto da visita';
+  photos.push({ url: photoUrl, caption, created_at: new Date().toISOString() });
   db.prepare('UPDATE visits SET photos_json = ? WHERE id = ?').run(JSON.stringify(photos), id);
+
+  await sendPhotoToTelegram({
+    filePath: path.join(uploadDir, req.file.filename),
+    reason: `Registro de Visita (#${id})`,
+    storeName: visit.store_name,
+    promoterName: req.user?.name,
+    details: caption,
+  });
+
   res.json({ photoUrl, photos });
 });
 

@@ -1,7 +1,9 @@
 const express = require('express');
 const { db } = require('../db/database');
+const path = require('node:path');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload } = require('../middleware/upload');
+const { upload, uploadDir } = require('../middleware/upload');
+const { sendPhotoToTelegram } = require('../services/telegramService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -138,13 +140,15 @@ router.get('/displays', (req, res) => {
 router.post(
   '/displays',
   upload.fields([{ name: 'photo_before', maxCount: 1 }, { name: 'photo_after', maxCount: 1 }]),
-  (req, res) => {
+  async (req, res) => {
     const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
     if (!store_id || !category || !exposure_type) {
       return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
     }
-    const photoBefore = req.files?.photo_before?.[0] ? `/uploads/${req.files.photo_before[0].filename}` : '';
-    const photoAfter = req.files?.photo_after?.[0] ? `/uploads/${req.files.photo_after[0].filename}` : '';
+    const beforeFile = req.files?.photo_before?.[0];
+    const afterFile = req.files?.photo_after?.[0];
+    const photoBefore = beforeFile ? `/uploads/${beforeFile.filename}` : '';
+    const photoAfter = afterFile ? `/uploads/${afterFile.filename}` : '';
 
     const r = db.prepare(`
       INSERT INTO displays_exposures (visit_id, store_id, promoter_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, photo_before, photo_after, notes)
@@ -164,6 +168,29 @@ router.post(
       photoAfter,
       notes || ''
     );
+
+    const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id);
+    const details = `Categoria: ${category} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
+
+    if (beforeFile) {
+      await sendPhotoToTelegram({
+        filePath: path.join(uploadDir, beforeFile.filename),
+        reason: `Exposição (${exposure_type}) — Foto ANTES`,
+        storeName: store?.name,
+        promoterName: req.user?.name,
+        details,
+      });
+    }
+    if (afterFile) {
+      await sendPhotoToTelegram({
+        filePath: path.join(uploadDir, afterFile.filename),
+        reason: `Exposição (${exposure_type}) — Foto DEPOIS`,
+        storeName: store?.name,
+        promoterName: req.user?.name,
+        details,
+      });
+    }
+
     logAudit(req.user, 'CREATE', 'displays_exposures', r.lastInsertRowid, `Exposição ${exposure_type} registrada`);
     res.status(201).json({ id: r.lastInsertRowid, photo_before: photoBefore, photo_after: photoAfter });
   }

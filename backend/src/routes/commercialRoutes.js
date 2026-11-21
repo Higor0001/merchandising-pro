@@ -4,6 +4,7 @@ const { db } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
+const { sendPhotoToTelegram } = require('../services/telegramService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -27,11 +28,11 @@ router.get('/prices', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-router.post('/prices', upload.single('photo'), (req, res) => {
+router.post('/prices', upload.single('photo'), async (req, res) => {
   const { visit_id, store_id, product_id, gondola_price, promo_price, has_price_tag, competitor_name, competitor_price, notes } = req.body || {};
   if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
 
-  const product = db.prepare('SELECT system_price FROM products WHERE id = ?').get(product_id);
+  const product = db.prepare('SELECT name, system_price FROM products WHERE id = ?').get(product_id);
   const sysPrice = product ? Number(product.system_price) : 0;
   const gPrice = gondola_price !== '' && gondola_price !== undefined && gondola_price !== null ? Number(gondola_price) : null;
   const tagPresent = has_price_tag === 'false' || has_price_tag === false || has_price_tag === '0' ? 0 : 1;
@@ -62,6 +63,17 @@ router.post('/prices', upload.single('photo'), (req, res) => {
       INSERT INTO occurrences (visit_id, store_id, product_id, promoter_id, type, priority, description, photo_url, status)
       VALUES (?, ?, ?, ?, 'Falta de Preço', 'Média', ?, ?, 'Aberta')
     `).run(visit_id || null, store_id, product_id, req.user.id, notes || 'Produto sem etiqueta de preço na gôndola.', photoUrl);
+  }
+
+  if (req.file) {
+    const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id);
+    await sendPhotoToTelegram({
+      filePath: path.join(uploadDir, req.file.filename),
+      reason: 'Precificação / Conferência de Etiqueta',
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: `Produto: ${product?.name || product_id} | Preço Gôndola: ${gPrice !== null ? `R$ ${gPrice.toFixed(2)}` : 'Sem etiqueta'}${notes ? ` | Obs: ${notes}` : ''}`,
+    });
   }
 
   logAudit(req.user, 'CREATE', 'price_checks', r.lastInsertRowid, `Preço conferido produto #${product_id}`);
@@ -196,7 +208,7 @@ router.post('/campaigns', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.post('/campaigns/:id/execute', upload.single('photo'), (req, res) => {
+router.post('/campaigns/:id/execute', upload.single('photo'), async (req, res) => {
   const { id } = req.params;
   const { store_id, visit_id, compliant, checklist_status, notes } = req.body || {};
   if (!store_id) return res.status(400).json({ error: 'Loja é obrigatória.' });
@@ -206,6 +218,18 @@ router.post('/campaigns/:id/execute', upload.single('photo'), (req, res) => {
     INSERT INTO campaign_executions (campaign_id, store_id, visit_id, promoter_id, checklist_status_json, compliant, photo_url, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, store_id, visit_id || null, req.user.id, checklist_status || '[]', compliant === 'false' || compliant === false ? 0 : 1, photoUrl, notes || '');
+
+  if (req.file) {
+    const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id);
+    const camp = db.prepare('SELECT title FROM campaigns WHERE id = ?').get(id);
+    await sendPhotoToTelegram({
+      filePath: path.join(uploadDir, req.file.filename),
+      reason: `Comprovação de Campanha (${camp?.title || `#${id}`})`,
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: notes || 'Campanha implantada no PDV',
+    });
+  }
 
   logAudit(req.user, 'EXECUTE', 'campaign_executions', r.lastInsertRowid, `Campanha #${id} executada na loja #${store_id}`);
   res.status(201).json({ id: r.lastInsertRowid, photo_url: photoUrl });
@@ -230,7 +254,7 @@ router.get('/occurrences', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-router.post('/occurrences', upload.single('photo'), (req, res) => {
+router.post('/occurrences', upload.single('photo'), async (req, res) => {
   const { visit_id, store_id, product_id, type, priority, description } = req.body || {};
   if (!store_id || !type || !description) return res.status(400).json({ error: 'Loja, tipo e descrição são obrigatórios.' });
 
@@ -239,6 +263,17 @@ router.post('/occurrences', upload.single('photo'), (req, res) => {
     INSERT INTO occurrences (visit_id, store_id, product_id, promoter_id, type, priority, description, photo_url, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Aberta')
   `).run(visit_id || null, store_id, product_id || null, req.user.id, type, priority || 'Média', description, photoUrl);
+
+  if (req.file) {
+    const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id);
+    await sendPhotoToTelegram({
+      filePath: path.join(uploadDir, req.file.filename),
+      reason: `Ocorrência: ${type} (Prioridade ${priority || 'Média'})`,
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: description,
+    });
+  }
 
   logAudit(req.user, 'CREATE', 'occurrences', r.lastInsertRowid, `Ocorrência ${type} (${priority || 'Média'})`);
   res.status(201).json({ id: r.lastInsertRowid, photo_url: photoUrl });
@@ -271,7 +306,7 @@ router.get('/ai/analyses', (_req, res) => {
   res.json(rows);
 });
 
-router.post('/ai/analyze-shelf', upload.single('photo'), (req, res) => {
+router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res) => {
   const { store_id, visit_id, notes } = req.body || {};
   const imagePath = req.file ? path.join(uploadDir, req.file.filename) : null;
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : '';
@@ -294,6 +329,17 @@ router.post('/ai/analyze-shelf', upload.single('photo'), (req, res) => {
     result.auto_report,
     result.confidence
   );
+
+  if (imagePath) {
+    const store = store_id ? db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id) : null;
+    await sendPhotoToTelegram({
+      filePath: imagePath,
+      reason: `Análise de Gôndola com IA (Score: ${result.planogram_score}% | Confiança: ${result.confidence}%)`,
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: `${result.auto_report}${notes ? ` | Contexto: ${notes}` : ''}`,
+    });
+  }
 
   logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', r.lastInsertRowid, `Análise IA de gôndola (confiança ${result.confidence}%)`);
   res.status(201).json(db.prepare('SELECT * FROM ai_analyses WHERE id = ?').get(r.lastInsertRowid));
