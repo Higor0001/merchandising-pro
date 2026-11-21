@@ -1,236 +1,332 @@
 const express = require('express');
-const { db } = require('../db/database');
+const path = require('node:path');
+const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
-const path = require('node:path');
 
 const router = express.Router();
 router.use(authenticate);
 
 // --- STORES ---
-router.get('/stores', (_req, res) => {
-  const stores = db.prepare('SELECT * FROM stores ORDER BY name').all();
-  res.json(stores);
+router.get('/stores', async (_req, res, next) => {
+  try {
+    const stores = await (await col('stores')).find({}, { projection: { _id: 0 } }).sort({ name: 1 }).toArray();
+    res.json(stores);
+  } catch (err) { next(err); }
 });
 
-router.post('/stores', (req, res) => {
-  const { name, type, banner, network, address, city, region, route_name, visit_frequency, contact_name, contact_phone } = req.body || {};
-  if (!name || !address) return res.status(400).json({ error: 'Nome e endereço da loja são obrigatórios.' });
+router.post('/stores', async (req, res, next) => {
+  try {
+    const { name, type, banner, network, address, city, region, route_name, visit_frequency, contact_name, contact_phone } = req.body || {};
+    if (!name || !address) return res.status(400).json({ error: 'Nome e endereço da loja são obrigatórios.' });
 
-  const r = db.prepare(`
-    INSERT INTO stores (name, type, banner, network, address, city, region, route_name, visit_frequency, contact_name, contact_phone)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    name,
-    type || 'Supermercado',
-    banner || '',
-    network || '',
-    address,
-    city || '',
-    region || 'Centro',
-    route_name || 'Rota Padrão',
-    visit_frequency || 'Semanal',
-    contact_name || '',
-    contact_phone || ''
-  );
-  logAudit(req.user, 'CREATE', 'stores', r.lastInsertRowid, `Loja ${name} cadastrada`);
-  res.status(201).json(db.prepare('SELECT * FROM stores WHERE id = ?').get(r.lastInsertRowid));
+    const id = await nextId('stores');
+    const doc = {
+      id,
+      name,
+      type: type || 'Supermercado',
+      banner: banner || '',
+      network: network || '',
+      address,
+      city: city || '',
+      region: region || 'Centro',
+      route_name: route_name || 'Rota Padrão',
+      visit_frequency: visit_frequency || 'Semanal',
+      contact_name: contact_name || '',
+      contact_phone: contact_phone || '',
+      active: 1,
+      created_at: nowStr(),
+    };
+    await (await col('stores')).insertOne(doc);
+    await logAudit(req.user, 'CREATE', 'stores', id, `Loja ${name} cadastrada`);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
-router.put('/stores/:id', (req, res) => {
-  const { id } = req.params;
-  const existing = db.prepare('SELECT * FROM stores WHERE id = ?').get(id);
-  if (!existing) return res.status(404).json({ error: 'Loja não encontrada.' });
+router.put('/stores/:id', async (req, res, next) => {
+  try {
+    const sid = Number(req.params.id);
+    const stores = await col('stores');
+    const existing = await stores.findOne({ id: sid });
+    if (!existing) return res.status(404).json({ error: 'Loja não encontrada.' });
 
-  const b = req.body || {};
-  db.prepare(`
-    UPDATE stores SET name=?, type=?, banner=?, network=?, address=?, city=?, region=?, route_name=?, visit_frequency=?, contact_name=?, contact_phone=?, active=?
-    WHERE id=?
-  `).run(
-    b.name ?? existing.name,
-    b.type ?? existing.type,
-    b.banner ?? existing.banner,
-    b.network ?? existing.network,
-    b.address ?? existing.address,
-    b.city ?? existing.city,
-    b.region ?? existing.region,
-    b.route_name ?? existing.route_name,
-    b.visit_frequency ?? existing.visit_frequency,
-    b.contact_name ?? existing.contact_name,
-    b.contact_phone ?? existing.contact_phone,
-    b.active !== undefined ? (b.active ? 1 : 0) : existing.active,
-    id
-  );
-  logAudit(req.user, 'UPDATE', 'stores', Number(id), `Loja ${existing.name} atualizada`);
-  res.json(db.prepare('SELECT * FROM stores WHERE id = ?').get(id));
+    const b = req.body || {};
+    const updated = {
+      name: b.name ?? existing.name,
+      type: b.type ?? existing.type,
+      banner: b.banner ?? existing.banner,
+      network: b.network ?? existing.network,
+      address: b.address ?? existing.address,
+      city: b.city ?? existing.city,
+      region: b.region ?? existing.region,
+      route_name: b.route_name ?? existing.route_name,
+      visit_frequency: b.visit_frequency ?? existing.visit_frequency,
+      contact_name: b.contact_name ?? existing.contact_name,
+      contact_phone: b.contact_phone ?? existing.contact_phone,
+      active: b.active !== undefined ? (b.active ? 1 : 0) : existing.active,
+    };
+    await stores.updateOne({ id: sid }, { $set: updated });
+    await logAudit(req.user, 'UPDATE', 'stores', sid, `Loja ${existing.name} atualizada`);
+    res.json(await stores.findOne({ id: sid }, { projection: { _id: 0 } }));
+  } catch (err) { next(err); }
 });
 
-router.get('/stores/:id/history', (req, res) => {
-  const { id } = req.params;
-  const store = db.prepare('SELECT * FROM stores WHERE id = ?').get(id);
-  if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
+router.get('/stores/:id/history', async (req, res, next) => {
+  try {
+    const sid = Number(req.params.id);
+    const store = await (await col('stores')).findOne({ id: sid }, { projection: { _id: 0 } });
+    if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
 
-  const visits = db.prepare(`
-    SELECT v.*, u.name as promoter_name
-    FROM visits v JOIN users u ON u.id = v.promoter_id
-    WHERE v.store_id = ? ORDER BY v.scheduled_date DESC, v.id DESC LIMIT 30
-  `).all(id);
-  const occurrences = db.prepare('SELECT * FROM occurrences WHERE store_id = ? ORDER BY created_at DESC LIMIT 30').all(id);
-  const replenishments = db.prepare(`
-    SELECT r.*, p.name as product_name FROM replenishments r JOIN products p ON p.id = r.product_id
-    WHERE r.store_id = ? ORDER BY r.created_at DESC LIMIT 30
-  `).all(id);
-  const displays = db.prepare('SELECT * FROM displays_exposures WHERE store_id = ? ORDER BY created_at DESC LIMIT 20').all(id);
+    const users = await (await col('users')).find({}).toArray();
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const products = await (await col('products')).find({}).toArray();
+    const prodMap = Object.fromEntries(products.map((p) => [p.id, p.name]));
 
-  res.json({ store, visits, occurrences, replenishments, displays });
+    const visits = (await (await col('visits')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ scheduled_date: -1, id: -1 }).limit(30).toArray())
+      .map((v) => ({ ...v, promoter_name: userMap[v.promoter_id] || 'Promotor' }));
+    const occurrences = await (await col('occurrences')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray();
+    const replenishments = (await (await col('replenishments')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray())
+      .map((r) => ({ ...r, product_name: prodMap[r.product_id] || '-' }));
+    const displays = await (await col('displays_exposures')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(20).toArray();
+
+    res.json({ store, visits, occurrences, replenishments, displays });
+  } catch (err) { next(err); }
 });
 
 // --- ROUTES ---
-router.get('/routes', (_req, res) => {
-  const routes = db.prepare(`
-    SELECT r.*, u.name as promoter_name
-    FROM routes r LEFT JOIN users u ON u.id = r.promoter_id
-    ORDER BY r.day_of_week, r.name
-  `).all();
-  res.json(routes);
+router.get('/routes', async (_req, res, next) => {
+  try {
+    const users = await (await col('users')).find({}).toArray();
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const routes = (await (await col('routes')).find({}, { projection: { _id: 0 } }).sort({ day_of_week: 1, name: 1 }).toArray())
+      .map((r) => ({ ...r, promoter_name: userMap[r.promoter_id] || '' }));
+    res.json(routes);
+  } catch (err) { next(err); }
 });
 
-router.post('/routes', (req, res) => {
-  const { name, region, promoter_id, day_of_week, store_ids, notes } = req.body || {};
-  if (!name || !day_of_week) return res.status(400).json({ error: 'Nome da rota e dia da semana são obrigatórios.' });
+router.post('/routes', async (req, res, next) => {
+  try {
+    const { name, region, promoter_id, day_of_week, store_ids, notes } = req.body || {};
+    if (!name || !day_of_week) return res.status(400).json({ error: 'Nome da rota e dia da semana são obrigatórios.' });
 
-  const r = db.prepare(`
-    INSERT INTO routes (name, region, promoter_id, day_of_week, store_ids_json, notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(name, region || 'Centro', promoter_id || req.user.id, day_of_week, JSON.stringify(store_ids || []), notes || '');
-  logAudit(req.user, 'CREATE', 'routes', r.lastInsertRowid, `Rota ${name} criada`);
-  res.status(201).json(db.prepare('SELECT * FROM routes WHERE id = ?').get(r.lastInsertRowid));
+    const id = await nextId('routes');
+    const doc = {
+      id,
+      name,
+      region: region || 'Centro',
+      promoter_id: promoter_id || req.user.id,
+      day_of_week,
+      store_ids_json: JSON.stringify(store_ids || []),
+      notes: notes || '',
+      created_at: nowStr(),
+    };
+    await (await col('routes')).insertOne(doc);
+    await logAudit(req.user, 'CREATE', 'routes', id, `Rota ${name} criada`);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
 // --- VISITS & CHECKLISTS ---
-router.get('/visits', (req, res) => {
-  const { status, store_id, promoter_id } = req.query;
-  let sql = `
-    SELECT v.*, s.name as store_name, s.type as store_type, s.address as store_address, s.region as store_region,
-           u.name as promoter_name,
-           (SELECT COUNT(*) FROM visit_checklists vc WHERE vc.visit_id = v.id) as checklist_total,
-           (SELECT COUNT(*) FROM visit_checklists vc WHERE vc.visit_id = v.id AND vc.completed = 1) as checklist_done
-    FROM visits v
-    JOIN stores s ON s.id = v.store_id
-    JOIN users u ON u.id = v.promoter_id
-    WHERE 1=1
-  `;
-  const params = [];
-  if (status) { sql += ' AND v.status = ?'; params.push(status); }
-  if (store_id) { sql += ' AND v.store_id = ?'; params.push(store_id); }
-  if (promoter_id) { sql += ' AND v.promoter_id = ?'; params.push(promoter_id); }
-  sql += ' ORDER BY v.scheduled_date DESC, v.scheduled_time ASC';
-  res.json(db.prepare(sql).all(...params));
+router.get('/visits', async (req, res, next) => {
+  try {
+    const { status, store_id, promoter_id } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    if (store_id) filter.store_id = Number(store_id);
+    if (promoter_id) filter.promoter_id = Number(promoter_id);
+
+    const [visits, stores, users, checklists] = await Promise.all([
+      (await col('visits')).find(filter, { projection: { _id: 0 } }).sort({ scheduled_date: -1, scheduled_time: 1 }).toArray(),
+      (await col('stores')).find({}).toArray(),
+      (await col('users')).find({}).toArray(),
+      (await col('visit_checklists')).find({}).toArray(),
+    ]);
+
+    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s]));
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+
+    const enriched = visits.map((v) => {
+      const s = storeMap[v.store_id] || {};
+      const items = checklists.filter((c) => c.visit_id === v.id);
+      return {
+        ...v,
+        store_name: s.name || '-',
+        store_type: s.type || '-',
+        store_address: s.address || '-',
+        store_region: s.region || '-',
+        promoter_name: userMap[v.promoter_id] || '-',
+        checklist_total: items.length,
+        checklist_done: items.filter((i) => i.completed).length,
+      };
+    });
+    res.json(enriched);
+  } catch (err) { next(err); }
 });
 
-router.post('/visits', (req, res) => {
-  const { store_id, promoter_id, route_id, scheduled_date, scheduled_time, notes } = req.body || {};
-  if (!store_id || !scheduled_date) return res.status(400).json({ error: 'Loja e data são obrigatórias.' });
+router.post('/visits', async (req, res, next) => {
+  try {
+    const { store_id, promoter_id, route_id, scheduled_date, scheduled_time, notes } = req.body || {};
+    if (!store_id || !scheduled_date) return res.status(400).json({ error: 'Loja e data são obrigatórias.' });
 
-  const r = db.prepare(`
-    INSERT INTO visits (store_id, promoter_id, route_id, scheduled_date, scheduled_time, notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(store_id, promoter_id || req.user.id, route_id || null, scheduled_date, scheduled_time || '08:00', notes || '');
-  createDefaultChecklist(r.lastInsertRowid, 0);
-  logAudit(req.user, 'CREATE', 'visits', r.lastInsertRowid, `Visita agendada para loja #${store_id}`);
-  res.status(201).json(db.prepare('SELECT * FROM visits WHERE id = ?').get(r.lastInsertRowid));
+    const id = await nextId('visits');
+    const doc = {
+      id,
+      store_id: Number(store_id),
+      promoter_id: Number(promoter_id || req.user.id),
+      route_id: route_id ? Number(route_id) : null,
+      scheduled_date,
+      scheduled_time: scheduled_time || '08:00',
+      checkin_at: null,
+      checkout_at: null,
+      duration_minutes: 0,
+      status: 'Pendente',
+      checkin_lat: null,
+      checkin_lng: null,
+      notes: notes || '',
+      problems_found: '',
+      opportunities_found: '',
+      photos_json: '[]',
+      created_at: nowStr(),
+    };
+    await (await col('visits')).insertOne(doc);
+    await createDefaultChecklist(id, 0);
+    await logAudit(req.user, 'CREATE', 'visits', id, `Visita agendada para loja #${store_id}`);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
-router.post('/visits/:id/checkin', (req, res) => {
-  const { id } = req.params;
-  const visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(id);
-  if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+router.post('/visits/:id/checkin', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const visitsCol = await col('visits');
+    const visit = await visitsCol.findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
 
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const { lat, lng } = req.body || {};
-  db.prepare(`
-    UPDATE visits SET checkin_at = COALESCE(checkin_at, ?), status = 'Em Andamento', checkin_lat = ?, checkin_lng = ?
-    WHERE id = ?
-  `).run(now, lat || null, lng || null, id);
-  db.prepare("UPDATE visit_checklists SET completed = 1 WHERE visit_id = ? AND item_key = 'loja_visitada'").run(id);
-
-  logAudit(req.user, 'CHECKIN', 'visits', Number(id), `Check-in realizado na visita #${id}`);
-  res.json(db.prepare('SELECT * FROM visits WHERE id = ?').get(id));
+    const { lat, lng } = req.body || {};
+    await visitsCol.updateOne(
+      { id: vid },
+      {
+        $set: {
+          checkin_at: visit.checkin_at || nowStr(),
+          status: 'Em Andamento',
+          checkin_lat: lat || null,
+          checkin_lng: lng || null,
+        },
+      }
+    );
+    await (await col('visit_checklists')).updateOne(
+      { visit_id: vid, item_key: 'loja_visitada' },
+      { $set: { completed: 1, updated_at: nowStr() } }
+    );
+    await logAudit(req.user, 'CHECKIN', 'visits', vid, `Check-in realizado na visita #${vid}`);
+    res.json(await visitsCol.findOne({ id: vid }, { projection: { _id: 0 } }));
+  } catch (err) { next(err); }
 });
 
-router.post('/visits/:id/checkout', (req, res) => {
-  const { id } = req.params;
-  const visit = db.prepare('SELECT * FROM visits WHERE id = ?').get(id);
-  if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+router.post('/visits/:id/checkout', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const visitsCol = await col('visits');
+    const visit = await visitsCol.findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
 
-  const nowDate = new Date();
-  const now = nowDate.toISOString().replace('T', ' ').slice(0, 19);
-  let duration = 45;
-  if (visit.checkin_at) {
-    const start = new Date(visit.checkin_at.replace(' ', 'T'));
-    const diff = Math.round((nowDate - start) / 60000);
-    if (!Number.isNaN(diff) && diff >= 1) duration = diff;
-  }
+    const nowDate = new Date();
+    let duration = 45;
+    if (visit.checkin_at) {
+      const start = new Date(visit.checkin_at.replace(' ', 'T'));
+      const diff = Math.round((nowDate - start) / 60000);
+      if (!Number.isNaN(diff) && diff >= 1) duration = diff;
+    }
 
-  const { notes, problems_found, opportunities_found } = req.body || {};
-  db.prepare(`
-    UPDATE visits SET checkout_at = ?, duration_minutes = ?, status = 'Concluída',
-      notes = COALESCE(?, notes), problems_found = COALESCE(?, problems_found), opportunities_found = COALESCE(?, opportunities_found)
-    WHERE id = ?
-  `).run(now, duration, notes ?? null, problems_found ?? null, opportunities_found ?? null, id);
-
-  logAudit(req.user, 'CHECKOUT', 'visits', Number(id), `Check-out realizado (${duration} min)`);
-  res.json(db.prepare('SELECT * FROM visits WHERE id = ?').get(id));
+    const { notes, problems_found, opportunities_found } = req.body || {};
+    await visitsCol.updateOne(
+      { id: vid },
+      {
+        $set: {
+          checkout_at: nowStr(),
+          duration_minutes: duration,
+          status: 'Concluída',
+          notes: notes ?? visit.notes,
+          problems_found: problems_found ?? visit.problems_found,
+          opportunities_found: opportunities_found ?? visit.opportunities_found,
+        },
+      }
+    );
+    await logAudit(req.user, 'CHECKOUT', 'visits', vid, `Check-out realizado (${duration} min)`);
+    res.json(await visitsCol.findOne({ id: vid }, { projection: { _id: 0 } }));
+  } catch (err) { next(err); }
 });
 
-router.post('/visits/:id/photos', upload.single('photo'), async (req, res) => {
-  const { id } = req.params;
-  const visit = db.prepare(`
-    SELECT v.*, s.name as store_name FROM visits v JOIN stores s ON s.id = v.store_id WHERE v.id = ?
-  `).get(id);
-  if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
-  if (!req.file) return res.status(400).json({ error: 'Nenhuma foto enviada.' });
+router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const visitsCol = await col('visits');
+    const visit = await visitsCol.findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!req.file) return res.status(400).json({ error: 'Nenhuma foto enviada.' });
 
-  const photos = JSON.parse(visit.photos_json || '[]');
-  const photoUrl = `/uploads/${req.file.filename}`;
-  const caption = req.body?.caption || 'Foto da visita';
-  photos.push({ url: photoUrl, caption, created_at: new Date().toISOString() });
-  db.prepare('UPDATE visits SET photos_json = ? WHERE id = ?').run(JSON.stringify(photos), id);
+    const store = await (await col('stores')).findOne({ id: visit.store_id });
+    const photos = JSON.parse(visit.photos_json || '[]');
+    const photoUrl = `/uploads/${req.file.filename}`;
+    const caption = req.body?.caption || 'Foto da visita';
+    photos.push({ url: photoUrl, caption, created_at: new Date().toISOString() });
+    await visitsCol.updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
 
-  await sendPhotoToTelegram({
-    filePath: path.join(uploadDir, req.file.filename),
-    reason: `Registro de Visita (#${id})`,
-    storeName: visit.store_name,
-    promoterName: req.user?.name,
-    details: caption,
-  });
+    await sendPhotoToTelegram({
+      filePath: path.join(uploadDir, req.file.filename),
+      reason: `Registro de Visita (#${vid})`,
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: caption,
+    });
 
-  res.json({ photoUrl, photos });
+    res.json({ photoUrl, photos });
+  } catch (err) { next(err); }
 });
 
-router.get('/visits/:id/checklist', (req, res) => {
-  const items = db.prepare('SELECT * FROM visit_checklists WHERE visit_id = ? ORDER BY id').all(req.params.id);
-  res.json(items);
+router.get('/visits/:id/checklist', async (req, res, next) => {
+  try {
+    const items = await (await col('visit_checklists'))
+      .find({ visit_id: Number(req.params.id) }, { projection: { _id: 0 } })
+      .sort({ id: 1 })
+      .toArray();
+    res.json(items);
+  } catch (err) { next(err); }
 });
 
-router.patch('/visits/:id/checklist/:itemId', (req, res) => {
-  const { id, itemId } = req.params;
-  const { completed, notes } = req.body || {};
-  db.prepare(
-    "UPDATE visit_checklists SET completed = ?, notes = COALESCE(?, notes), updated_at = datetime('now', 'localtime') WHERE id = ? AND visit_id = ?"
-  ).run(completed ? 1 : 0, notes ?? null, itemId, id);
-  res.json(db.prepare('SELECT * FROM visit_checklists WHERE visit_id = ? ORDER BY id').all(id));
+router.patch('/visits/:id/checklist/:itemId', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const itemId = Number(req.params.itemId);
+    const { completed, notes } = req.body || {};
+    const checkCol = await col('visit_checklists');
+    const update = { completed: completed ? 1 : 0, updated_at: nowStr() };
+    if (notes !== undefined) update.notes = notes;
+    await checkCol.updateOne({ id: itemId, visit_id: vid }, { $set: update });
+    res.json(await checkCol.find({ visit_id: vid }, { projection: { _id: 0 } }).sort({ id: 1 }).toArray());
+  } catch (err) { next(err); }
 });
 
-router.post('/visits/:id/checklist', (req, res) => {
-  const { id } = req.params;
-  const { label } = req.body || {};
-  if (!label) return res.status(400).json({ error: 'Descrição do item é obrigatória.' });
-  const key = `custom_${Date.now()}`;
-  db.prepare('INSERT INTO visit_checklists (visit_id, item_key, label, completed, is_custom) VALUES (?, ?, ?, 0, 1)').run(id, key, label);
-  res.status(201).json(db.prepare('SELECT * FROM visit_checklists WHERE visit_id = ? ORDER BY id').all(id));
+router.post('/visits/:id/checklist', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const { label } = req.body || {};
+    if (!label) return res.status(400).json({ error: 'Descrição do item é obrigatória.' });
+    const checkCol = await col('visit_checklists');
+    await checkCol.insertOne({
+      id: await nextId('visit_checklists'),
+      visit_id: vid,
+      item_key: `custom_${Date.now()}`,
+      label,
+      completed: 0,
+      notes: '',
+      is_custom: 1,
+      updated_at: nowStr(),
+    });
+    res.status(201).json(await checkCol.find({ visit_id: vid }, { projection: { _id: 0 } }).sort({ id: 1 }).toArray());
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
-const { db } = require('../db/database');
+const { col, nextId, nowStr } = require('../db/database');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'merchandising-pro-secret-key-2026';
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Token de autenticação não fornecido.' });
@@ -11,7 +11,11 @@ function authenticate(req, res, next) {
   const token = header.slice(7);
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = db.prepare('SELECT id, name, email, role, region, active FROM users WHERE id = ?').get(payload.id);
+    const users = await col('users');
+    const user = await users.findOne(
+      { id: Number(payload.id) },
+      { projection: { _id: 0, id: 1, name: 1, email: 1, role: 1, region: 1, active: 1 } }
+    );
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Usuário inativo ou não encontrado.' });
     }
@@ -31,11 +35,19 @@ function authorize(...roles) {
   };
 }
 
-function logAudit(user, action, entity, entityId = null, details = '') {
+async function logAudit(user, action, entity, entityId = null, details = '') {
   try {
-    db.prepare(
-      'INSERT INTO audit_logs (user_id, user_name, action, entity, entity_id, details) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(user?.id || null, user?.name || 'Sistema', action, entity, entityId, details);
+    const logs = await col('audit_logs');
+    await logs.insertOne({
+      id: await nextId('audit_logs'),
+      user_id: user?.id || null,
+      user_name: user?.name || 'Sistema',
+      action,
+      entity,
+      entity_id: entityId,
+      details,
+      created_at: nowStr(),
+    });
   } catch (err) {
     console.error('Audit log error:', err.message);
   }

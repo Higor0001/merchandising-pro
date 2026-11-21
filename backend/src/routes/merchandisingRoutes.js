@@ -1,6 +1,6 @@
 const express = require('express');
-const { db } = require('../db/database');
 const path = require('node:path');
+const { col, nextId, nowStr } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
@@ -10,248 +10,372 @@ const router = express.Router();
 router.use(authenticate);
 
 // --- BRANDS ---
-router.get('/brands', (_req, res) => {
-  res.json(db.prepare('SELECT * FROM brands ORDER BY is_own DESC, name').all());
+router.get('/brands', async (_req, res, next) => {
+  try {
+    const brands = await (await col('brands')).find({}, { projection: { _id: 0 } }).sort({ is_own: -1, name: 1 }).toArray();
+    res.json(brands);
+  } catch (err) { next(err); }
 });
 
-router.post('/brands', (req, res) => {
-  const { name, is_own, color } = req.body || {};
-  if (!name) return res.status(400).json({ error: 'Nome da marca é obrigatório.' });
+router.post('/brands', async (req, res, next) => {
   try {
-    const r = db.prepare('INSERT INTO brands (name, is_own, color) VALUES (?, ?, ?)').run(name, is_own ? 1 : 0, color || '#2563eb');
-    res.status(201).json(db.prepare('SELECT * FROM brands WHERE id = ?').get(r.lastInsertRowid));
-  } catch {
-    res.status(400).json({ error: 'Marca já cadastrada.' });
-  }
+    const { name, is_own, color } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'Nome da marca é obrigatório.' });
+    const brandsCol = await col('brands');
+    const exists = await brandsCol.findOne({ name });
+    if (exists) return res.status(400).json({ error: 'Marca já cadastrada.' });
+    const doc = { id: await nextId('brands'), name, is_own: is_own ? 1 : 0, color: color || '#2563eb' };
+    await brandsCol.insertOne(doc);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
 // --- PRODUCTS ---
-router.get('/products', (req, res) => {
-  const { ean, category, brand_id } = req.query;
-  let sql = `
-    SELECT p.*, b.name as brand_name, b.is_own, b.color as brand_color
-    FROM products p LEFT JOIN brands b ON b.id = p.brand_id
-    WHERE 1=1
-  `;
-  const params = [];
-  if (ean) { sql += ' AND p.ean = ?'; params.push(ean); }
-  if (category) { sql += ' AND p.category = ?'; params.push(category); }
-  if (brand_id) { sql += ' AND p.brand_id = ?'; params.push(brand_id); }
-  sql += ' ORDER BY p.name';
-  res.json(db.prepare(sql).all(...params));
+router.get('/products', async (req, res, next) => {
+  try {
+    const { ean, category, brand_id } = req.query;
+    const filter = {};
+    if (ean) filter.ean = ean;
+    if (category) filter.category = category;
+    if (brand_id) filter.brand_id = Number(brand_id);
+
+    const [products, brands] = await Promise.all([
+      (await col('products')).find(filter, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
+      (await col('brands')).find({}).toArray(),
+    ]);
+    const brandMap = Object.fromEntries(brands.map((b) => [b.id, b]));
+    res.json(
+      products.map((p) => ({
+        ...p,
+        brand_name: brandMap[p.brand_id]?.name || '',
+        is_own: brandMap[p.brand_id]?.is_own ?? 1,
+        brand_color: brandMap[p.brand_id]?.color || '#1d4ed8',
+      }))
+    );
+  } catch (err) { next(err); }
 });
 
-router.post('/products', (req, res) => {
-  const { sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings } = req.body || {};
-  if (!sku || !ean || !name || !category) {
-    return res.status(400).json({ error: 'SKU, EAN, nome e categoria são obrigatórios.' });
-  }
+router.post('/products', async (req, res, next) => {
   try {
-    const r = db.prepare(`
-      INSERT INTO products (sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(sku, ean, name, brand_id || null, category, unit || 'UN', Number(system_price || 0), Number(min_stock || 10), Number(ideal_facings || 4));
-    logAudit(req.user, 'CREATE', 'products', r.lastInsertRowid, `Produto ${name} (${sku}) cadastrado`);
-    res.status(201).json(db.prepare('SELECT * FROM products WHERE id = ?').get(r.lastInsertRowid));
-  } catch {
-    res.status(400).json({ error: 'SKU já cadastrado ou dados inválidos.' });
-  }
+    const { sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings } = req.body || {};
+    if (!sku || !ean || !name || !category) {
+      return res.status(400).json({ error: 'SKU, EAN, nome e categoria são obrigatórios.' });
+    }
+    const productsCol = await col('products');
+    if (await productsCol.findOne({ sku })) {
+      return res.status(400).json({ error: 'SKU já cadastrado.' });
+    }
+    const id = await nextId('products');
+    const doc = {
+      id,
+      sku,
+      ean,
+      name,
+      brand_id: brand_id ? Number(brand_id) : null,
+      category,
+      unit: unit || 'UN',
+      system_price: Number(system_price || 0),
+      min_stock: Number(min_stock || 10),
+      ideal_facings: Number(ideal_facings || 4),
+      active: 1,
+      created_at: nowStr(),
+    };
+    await productsCol.insertOne(doc);
+    await logAudit(req.user, 'CREATE', 'products', id, `Produto ${name} (${sku}) cadastrado`);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
 // --- REPLENISHMENTS ---
-router.get('/replenishments', (req, res) => {
-  const { store_id, status } = req.query;
-  let sql = `
-    SELECT r.*, s.name as store_name, p.name as product_name, p.sku, p.ean, b.name as brand_name, u.name as promoter_name
-    FROM replenishments r
-    JOIN stores s ON s.id = r.store_id
-    JOIN products p ON p.id = r.product_id
-    LEFT JOIN brands b ON b.id = p.brand_id
-    LEFT JOIN users u ON u.id = r.promoter_id
-    WHERE 1=1
-  `;
-  const params = [];
-  if (store_id) { sql += ' AND r.store_id = ?'; params.push(store_id); }
-  if (status) { sql += ' AND r.status = ?'; params.push(status); }
-  sql += ' ORDER BY r.created_at DESC LIMIT 100';
-  res.json(db.prepare(sql).all(...params));
+router.get('/replenishments', async (req, res, next) => {
+  try {
+    const { store_id, status } = req.query;
+    const filter = {};
+    if (store_id) filter.store_id = Number(store_id);
+    if (status) filter.status = status;
+
+    const [rows, stores, products, brands, users] = await Promise.all([
+      (await col('replenishments')).find(filter, { projection: { _id: 0 } }).sort({ id: -1 }).limit(100).toArray(),
+      (await col('stores')).find({}).toArray(),
+      (await col('products')).find({}).toArray(),
+      (await col('brands')).find({}).toArray(),
+      (await col('users')).find({}).toArray(),
+    ]);
+    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
+    const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
+    const brandMap = Object.fromEntries(brands.map((b) => [b.id, b.name]));
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+
+    res.json(
+      rows.map((r) => {
+        const p = prodMap[r.product_id] || {};
+        return {
+          ...r,
+          store_name: storeMap[r.store_id] || '-',
+          product_name: p.name || '-',
+          sku: p.sku || '',
+          ean: p.ean || '',
+          brand_name: brandMap[p.brand_id] || '',
+          promoter_name: userMap[r.promoter_id] || '',
+        };
+      })
+    );
+  } catch (err) { next(err); }
 });
 
-router.post('/replenishments', (req, res) => {
-  const { visit_id, store_id, product_id, quantity_replenished, backroom_stock, gondola_stock, status, increase_exposure_opportunity, notes } = req.body || {};
-  if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
+router.post('/replenishments', async (req, res, next) => {
+  try {
+    const { visit_id, store_id, product_id, quantity_replenished, backroom_stock, gondola_stock, status, increase_exposure_opportunity, notes } = req.body || {};
+    if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
 
-  const finalStatus = status || 'Abastecido';
-  const r = db.prepare(`
-    INSERT INTO replenishments (visit_id, store_id, product_id, promoter_id, quantity_replenished, backroom_stock, gondola_stock, status, increase_exposure_opportunity, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    visit_id || null,
-    store_id,
-    product_id,
-    req.user.id,
-    Number(quantity_replenished || 0),
-    Number(backroom_stock || 0),
-    Number(gondola_stock || 0),
-    finalStatus,
-    increase_exposure_opportunity ? 1 : 0,
-    notes || ''
-  );
+    const finalStatus = status || 'Abastecido';
+    const id = await nextId('replenishments');
+    await (await col('replenishments')).insertOne({
+      id,
+      visit_id: visit_id ? Number(visit_id) : null,
+      store_id: Number(store_id),
+      product_id: Number(product_id),
+      promoter_id: req.user.id,
+      quantity_replenished: Number(quantity_replenished || 0),
+      backroom_stock: Number(backroom_stock || 0),
+      gondola_stock: Number(gondola_stock || 0),
+      status: finalStatus,
+      increase_exposure_opportunity: increase_exposure_opportunity ? 1 : 0,
+      notes: notes || '',
+      created_at: nowStr(),
+    });
 
-  // Sync store_inventory snapshot
-  db.prepare(`
-    INSERT INTO store_inventory (store_id, product_id, gondola_qty, backroom_qty, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
-    ON CONFLICT(store_id, product_id) DO UPDATE SET
-      gondola_qty = excluded.gondola_qty,
-      backroom_qty = excluded.backroom_qty,
-      updated_at = datetime('now', 'localtime')
-  `).run(store_id, product_id, Number(gondola_stock || 0), Number(backroom_stock || 0));
+    const invCol = await col('store_inventory');
+    await invCol.updateOne(
+      { store_id: Number(store_id), product_id: Number(product_id) },
+      {
+        $set: {
+          gondola_qty: Number(gondola_stock || 0),
+          backroom_qty: Number(backroom_stock || 0),
+          updated_at: nowStr(),
+        },
+        $setOnInsert: {
+          id: await nextId('store_inventory'),
+          separated_for_merchandising: 0,
+          last_inventory_at: nowStr(),
+        },
+      },
+      { upsert: true }
+    );
 
-  // If Ruptura, auto-create occurrence if not already open
-  if (finalStatus === 'Ruptura') {
-    db.prepare(`
-      INSERT INTO occurrences (visit_id, store_id, product_id, promoter_id, type, priority, description, status)
-      VALUES (?, ?, ?, ?, 'Ruptura', 'Alta', ?, 'Aberta')
-    `).run(visit_id || null, store_id, product_id, req.user.id, notes || 'Ruptura identificada no abastecimento.');
-  }
+    if (finalStatus === 'Ruptura') {
+      await (await col('occurrences')).insertOne({
+        id: await nextId('occurrences'),
+        visit_id: visit_id ? Number(visit_id) : null,
+        store_id: Number(store_id),
+        product_id: Number(product_id),
+        promoter_id: req.user.id,
+        type: 'Ruptura',
+        priority: 'Alta',
+        description: notes || 'Ruptura identificada no abastecimento.',
+        photo_url: '',
+        status: 'Aberta',
+        resolved_at: null,
+        created_at: nowStr(),
+      });
+    }
 
-  logAudit(req.user, 'CREATE', 'replenishments', r.lastInsertRowid, `Abastecimento ${finalStatus} loja #${store_id}`);
-  res.status(201).json({ id: r.lastInsertRowid });
+    await logAudit(req.user, 'CREATE', 'replenishments', id, `Abastecimento ${finalStatus} loja #${store_id}`);
+    res.status(201).json({ id });
+  } catch (err) { next(err); }
 });
 
 // --- DISPLAYS & EXPOSURES ---
-router.get('/displays', (req, res) => {
-  const { store_id, exposure_type } = req.query;
-  let sql = `
-    SELECT d.*, s.name as store_name, b.name as brand_name, u.name as promoter_name
-    FROM displays_exposures d
-    JOIN stores s ON s.id = d.store_id
-    LEFT JOIN brands b ON b.id = d.brand_id
-    LEFT JOIN users u ON u.id = d.promoter_id
-    WHERE 1=1
-  `;
-  const params = [];
-  if (store_id) { sql += ' AND d.store_id = ?'; params.push(store_id); }
-  if (exposure_type) { sql += ' AND d.exposure_type = ?'; params.push(exposure_type); }
-  sql += ' ORDER BY d.created_at DESC LIMIT 100';
-  res.json(db.prepare(sql).all(...params));
+router.get('/displays', async (req, res, next) => {
+  try {
+    const { store_id, exposure_type } = req.query;
+    const filter = {};
+    if (store_id) filter.store_id = Number(store_id);
+    if (exposure_type) filter.exposure_type = exposure_type;
+
+    const [rows, stores, brands, users] = await Promise.all([
+      (await col('displays_exposures')).find(filter, { projection: { _id: 0 } }).sort({ id: -1 }).limit(100).toArray(),
+      (await col('stores')).find({}).toArray(),
+      (await col('brands')).find({}).toArray(),
+      (await col('users')).find({}).toArray(),
+    ]);
+    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
+    const brandMap = Object.fromEntries(brands.map((b) => [b.id, b.name]));
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+
+    res.json(
+      rows.map((d) => ({
+        ...d,
+        store_name: storeMap[d.store_id] || '-',
+        brand_name: brandMap[d.brand_id] || '',
+        promoter_name: userMap[d.promoter_id] || '',
+      }))
+    );
+  } catch (err) { next(err); }
 });
 
 router.post(
   '/displays',
   upload.fields([{ name: 'photo_before', maxCount: 1 }, { name: 'photo_after', maxCount: 1 }]),
-  async (req, res) => {
-    const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
-    if (!store_id || !category || !exposure_type) {
-      return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
-    }
-    const beforeFile = req.files?.photo_before?.[0];
-    const afterFile = req.files?.photo_after?.[0];
-    const photoBefore = beforeFile ? `/uploads/${beforeFile.filename}` : '';
-    const photoAfter = afterFile ? `/uploads/${afterFile.filename}` : '';
+  async (req, res, next) => {
+    try {
+      const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
+      if (!store_id || !category || !exposure_type) {
+        return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
+      }
+      const beforeFile = req.files?.photo_before?.[0];
+      const afterFile = req.files?.photo_after?.[0];
+      const photoBefore = beforeFile ? `/uploads/${beforeFile.filename}` : '';
+      const photoAfter = afterFile ? `/uploads/${afterFile.filename}` : '';
 
-    const r = db.prepare(`
-      INSERT INTO displays_exposures (visit_id, store_id, promoter_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, photo_before, photo_after, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      visit_id || null,
-      store_id,
-      req.user.id,
-      category,
-      brand_id || null,
-      exposure_type,
-      Number(facings_actual || 0),
-      Number(facings_expected || 0),
-      planogram_compliant === 'false' || planogram_compliant === false || planogram_compliant === '0' ? 0 : 1,
-      pos_materials || '',
-      photoBefore,
-      photoAfter,
-      notes || ''
-    );
-
-    const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(store_id);
-    const details = `Categoria: ${category} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
-
-    if (beforeFile) {
-      await sendPhotoToTelegram({
-        filePath: path.join(uploadDir, beforeFile.filename),
-        reason: `Exposição (${exposure_type}) — Foto ANTES`,
-        storeName: store?.name,
-        promoterName: req.user?.name,
-        details,
+      const id = await nextId('displays_exposures');
+      await (await col('displays_exposures')).insertOne({
+        id,
+        visit_id: visit_id ? Number(visit_id) : null,
+        store_id: Number(store_id),
+        promoter_id: req.user.id,
+        category,
+        brand_id: brand_id ? Number(brand_id) : null,
+        exposure_type,
+        facings_actual: Number(facings_actual || 0),
+        facings_expected: Number(facings_expected || 0),
+        planogram_compliant: planogram_compliant === 'false' || planogram_compliant === false || planogram_compliant === '0' ? 0 : 1,
+        pos_materials: pos_materials || '',
+        photo_before: photoBefore,
+        photo_after: photoAfter,
+        notes: notes || '',
+        created_at: nowStr(),
       });
-    }
-    if (afterFile) {
-      await sendPhotoToTelegram({
-        filePath: path.join(uploadDir, afterFile.filename),
-        reason: `Exposição (${exposure_type}) — Foto DEPOIS`,
-        storeName: store?.name,
-        promoterName: req.user?.name,
-        details,
-      });
-    }
 
-    logAudit(req.user, 'CREATE', 'displays_exposures', r.lastInsertRowid, `Exposição ${exposure_type} registrada`);
-    res.status(201).json({ id: r.lastInsertRowid, photo_before: photoBefore, photo_after: photoAfter });
+      const store = await (await col('stores')).findOne({ id: Number(store_id) });
+      const details = `Categoria: ${category} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
+
+      if (beforeFile) {
+        await sendPhotoToTelegram({
+          filePath: path.join(uploadDir, beforeFile.filename),
+          reason: `Exposição (${exposure_type}) — Foto ANTES`,
+          storeName: store?.name,
+          promoterName: req.user?.name,
+          details,
+        });
+      }
+      if (afterFile) {
+        await sendPhotoToTelegram({
+          filePath: path.join(uploadDir, afterFile.filename),
+          reason: `Exposição (${exposure_type}) — Foto DEPOIS`,
+          storeName: store?.name,
+          promoterName: req.user?.name,
+          details,
+        });
+      }
+
+      await logAudit(req.user, 'CREATE', 'displays_exposures', id, `Exposição ${exposure_type} registrada`);
+      res.status(201).json({ id, photo_before: photoBefore, photo_after: photoAfter });
+    } catch (err) { next(err); }
   }
 );
 
 // --- PLANOGRAMS & SHARE OF SHELF ---
-router.get('/planograms', (_req, res) => {
-  const rows = db.prepare(`
-    SELECT pa.*, s.name as store_name, b.name as brand_name, b.is_own, p.name as product_name
-    FROM planogram_audits pa
-    JOIN stores s ON s.id = pa.store_id
-    LEFT JOIN brands b ON b.id = pa.brand_id
-    LEFT JOIN products p ON p.id = pa.product_id
-    ORDER BY pa.created_at DESC LIMIT 100
-  `).all();
+router.get('/planograms', async (_req, res, next) => {
+  try {
+    const [audits, stores, brands, products] = await Promise.all([
+      (await col('planogram_audits')).find({}, { projection: { _id: 0 } }).sort({ id: -1 }).limit(100).toArray(),
+      (await col('stores')).find({}).toArray(),
+      (await col('brands')).find({}).toArray(),
+      (await col('products')).find({}).toArray(),
+    ]);
+    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
+    const brandMap = Object.fromEntries(brands.map((b) => [b.id, b]));
+    const prodMap = Object.fromEntries(products.map((p) => [p.id, p.name]));
 
-  const byBrand = db.prepare(`
-    SELECT b.name as brand_name, b.is_own, ROUND(AVG(pa.share_of_shelf), 1) as avg_share,
-           SUM(pa.actual_facings) as total_facings, SUM(pa.lost_spaces) as total_lost
-    FROM planogram_audits pa
-    LEFT JOIN brands b ON b.id = pa.brand_id
-    GROUP BY pa.brand_id
-  `).all();
+    const rows = audits.map((pa) => ({
+      ...pa,
+      store_name: storeMap[pa.store_id] || '-',
+      brand_name: brandMap[pa.brand_id]?.name || '-',
+      is_own: brandMap[pa.brand_id]?.is_own ?? 1,
+      product_name: prodMap[pa.product_id] || '-',
+    }));
 
-  const byCategory = db.prepare(`
-    SELECT pa.category, ROUND(AVG(pa.share_of_shelf), 1) as avg_share,
-           SUM(pa.actual_facings) as total_facings, SUM(pa.competitor_facings) as competitor_facings
-    FROM planogram_audits pa
-    GROUP BY pa.category
-  `).all();
+    const brandAgg = {};
+    const catAgg = {};
+    const storeAgg = {};
+    for (const r of rows) {
+      if (!brandAgg[r.brand_name]) brandAgg[r.brand_name] = { brand_name: r.brand_name, is_own: r.is_own, sum: 0, count: 0, total_facings: 0, total_lost: 0 };
+      brandAgg[r.brand_name].sum += Number(r.share_of_shelf || 0);
+      brandAgg[r.brand_name].count++;
+      brandAgg[r.brand_name].total_facings += Number(r.actual_facings || 0);
+      brandAgg[r.brand_name].total_lost += Number(r.lost_spaces || 0);
 
-  const byStore = db.prepare(`
-    SELECT s.name as store_name, ROUND(AVG(pa.share_of_shelf), 1) as avg_share,
-           ROUND(AVG(pa.compliant) * 100, 1) as compliance_pct
-    FROM planogram_audits pa
-    JOIN stores s ON s.id = pa.store_id
-    GROUP BY pa.store_id
-  `).all();
+      if (!catAgg[r.category]) catAgg[r.category] = { category: r.category, sum: 0, count: 0, total_facings: 0, competitor_facings: 0 };
+      catAgg[r.category].sum += Number(r.share_of_shelf || 0);
+      catAgg[r.category].count++;
+      catAgg[r.category].total_facings += Number(r.actual_facings || 0);
+      catAgg[r.category].competitor_facings += Number(r.competitor_facings || 0);
 
-  res.json({ rows, indicators: { byBrand, byCategory, byStore } });
+      if (!storeAgg[r.store_name]) storeAgg[r.store_name] = { store_name: r.store_name, sum: 0, compSum: 0, count: 0 };
+      storeAgg[r.store_name].sum += Number(r.share_of_shelf || 0);
+      storeAgg[r.store_name].compSum += Number(r.compliant || 0);
+      storeAgg[r.store_name].count++;
+    }
+
+    const byBrand = Object.values(brandAgg).map((b) => ({
+      brand_name: b.brand_name,
+      is_own: b.is_own,
+      avg_share: Number((b.sum / b.count).toFixed(1)),
+      total_facings: b.total_facings,
+      total_lost: b.total_lost,
+    }));
+    const byCategory = Object.values(catAgg).map((c) => ({
+      category: c.category,
+      avg_share: Number((c.sum / c.count).toFixed(1)),
+      total_facings: c.total_facings,
+      competitor_facings: c.competitor_facings,
+    }));
+    const byStore = Object.values(storeAgg).map((s) => ({
+      store_name: s.store_name,
+      avg_share: Number((s.sum / s.count).toFixed(1)),
+      compliance_pct: Number(((s.compSum / s.count) * 100).toFixed(1)),
+    }));
+
+    res.json({ rows, indicators: { byBrand, byCategory, byStore } });
+  } catch (err) { next(err); }
 });
 
-router.post('/planograms', (req, res) => {
-  const { visit_id, store_id, category, brand_id, product_id, ideal_facings, actual_facings, total_category_facings, competitor_facings, position_level, notes } = req.body || {};
-  if (!store_id || !category) return res.status(400).json({ error: 'Loja e categoria são obrigatórias.' });
+router.post('/planograms', async (req, res, next) => {
+  try {
+    const { visit_id, store_id, category, brand_id, product_id, ideal_facings, actual_facings, total_category_facings, competitor_facings, position_level, notes } = req.body || {};
+    if (!store_id || !category) return res.status(400).json({ error: 'Loja e categoria são obrigatórias.' });
 
-  const ideal = Number(ideal_facings || 4);
-  const actual = Number(actual_facings || 0);
-  const total = Math.max(1, Number(total_category_facings || actual + Number(competitor_facings || 0) || 1));
-  const share = Number(((actual / total) * 100).toFixed(1));
-  const lost = Math.max(0, ideal - actual);
-  const compliant = actual >= ideal ? 1 : 0;
+    const ideal = Number(ideal_facings || 4);
+    const actual = Number(actual_facings || 0);
+    const total = Math.max(1, Number(total_category_facings || actual + Number(competitor_facings || 0) || 1));
+    const share = Number(((actual / total) * 100).toFixed(1));
+    const lost = Math.max(0, ideal - actual);
+    const compliant = actual >= ideal ? 1 : 0;
 
-  const r = db.prepare(`
-    INSERT INTO planogram_audits (visit_id, store_id, category, brand_id, product_id, ideal_facings, actual_facings, total_category_facings, competitor_facings, lost_spaces, position_level, share_of_shelf, compliant, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(visit_id || null, store_id, category, brand_id || null, product_id || null, ideal, actual, total, Number(competitor_facings || 0), lost, position_level || 'Olhos', share, compliant, notes || '');
+    const id = await nextId('planogram_audits');
+    await (await col('planogram_audits')).insertOne({
+      id,
+      visit_id: visit_id ? Number(visit_id) : null,
+      store_id: Number(store_id),
+      category,
+      brand_id: brand_id ? Number(brand_id) : null,
+      product_id: product_id ? Number(product_id) : null,
+      ideal_facings: ideal,
+      actual_facings: actual,
+      total_category_facings: total,
+      competitor_facings: Number(competitor_facings || 0),
+      lost_spaces: lost,
+      position_level: position_level || 'Olhos',
+      share_of_shelf: share,
+      compliant,
+      notes: notes || '',
+      created_at: nowStr(),
+    });
 
-  logAudit(req.user, 'CREATE', 'planogram_audits', r.lastInsertRowid, `Planograma ${category} share=${share}%`);
-  res.status(201).json({ id: r.lastInsertRowid, share_of_shelf: share, lost_spaces: lost, compliant });
+    await logAudit(req.user, 'CREATE', 'planogram_audits', id, `Planograma ${category} share=${share}%`);
+    res.status(201).json({ id, share_of_shelf: share, lost_spaces: lost, compliant });
+  } catch (err) { next(err); }
 });
 
 // --- SI5 GLOBAL API INTEGRATION ---
@@ -274,54 +398,66 @@ router.get('/si5/barcode/:codbar', async (req, res) => {
   }
 });
 
-router.post('/si5/import', (req, res) => {
-  const { codbar, produto, marca, categoria, embalagem, preco_medio, target_product_id } = req.body || {};
-  if (!codbar || !produto) {
-    return res.status(400).json({ error: 'Código de barras (codbar) e nome do produto são obrigatórios.' });
-  }
-
-  // If updating an existing product (e.g. filling official EAN for a PepsiCo item)
-  if (target_product_id) {
-    const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(target_product_id);
-    if (!existing) return res.status(404).json({ error: 'Produto destino não encontrado.' });
-    db.prepare('UPDATE products SET ean = ?, system_price = COALESCE(NULLIF(?, 0), system_price) WHERE id = ?')
-      .run(String(codbar), Number(preco_medio || 0), target_product_id);
-    logAudit(req.user, 'SI5_UPDATE_EAN', 'products', Number(target_product_id), `EAN ${codbar} vinculado via SI5 Global`);
-    return res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(target_product_id));
-  }
-
-  // Match or create brand
-  let brandId = null;
-  if (marca) {
-    const existingBrand = db.prepare('SELECT id FROM brands WHERE LOWER(name) = LOWER(?)').get(marca.trim());
-    if (existingBrand) {
-      brandId = existingBrand.id;
-    } else {
-      const bRes = db.prepare('INSERT INTO brands (name, is_own, color) VALUES (?, 1, ?)').run(marca.trim(), '#1d4ed8');
-      brandId = bRes.lastInsertRowid;
+router.post('/si5/import', async (req, res, next) => {
+  try {
+    const { codbar, produto, marca, categoria, embalagem, preco_medio, target_product_id } = req.body || {};
+    if (!codbar || !produto) {
+      return res.status(400).json({ error: 'Código de barras (codbar) e nome do produto são obrigatórios.' });
     }
-  }
 
-  const sku = `SI5-${String(codbar).slice(-6)}`;
-  const existingByEan = db.prepare('SELECT id FROM products WHERE ean = ?').get(String(codbar));
-  if (existingByEan) {
-    return res.status(400).json({ error: 'Já existe um produto cadastrado com este EAN.' });
-  }
+    const productsCol = await col('products');
+    if (target_product_id) {
+      const tid = Number(target_product_id);
+      const existing = await productsCol.findOne({ id: tid });
+      if (!existing) return res.status(404).json({ error: 'Produto destino não encontrado.' });
+      await productsCol.updateOne(
+        { id: tid },
+        {
+          $set: {
+            ean: String(codbar),
+            system_price: Number(preco_medio || 0) || existing.system_price,
+          },
+        }
+      );
+      await logAudit(req.user, 'SI5_UPDATE_EAN', 'products', tid, `EAN ${codbar} vinculado via SI5 Global`);
+      return res.json(await productsCol.findOne({ id: tid }, { projection: { _id: 0 } }));
+    }
 
-  const r = db.prepare(`
-    INSERT INTO products (sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 10, 4)
-  `).run(
-    sku,
-    String(codbar),
-    produto,
-    brandId,
-    categoria || 'Geral',
-    embalagem || 'UN',
-    Number(preco_medio || 0)
-  );
-  logAudit(req.user, 'SI5_IMPORT', 'products', r.lastInsertRowid, `Produto ${produto} (${codbar}) importado via SI5 Global`);
-  res.status(201).json(db.prepare('SELECT * FROM products WHERE id = ?').get(r.lastInsertRowid));
+    const brandsCol = await col('brands');
+    let brandId = null;
+    if (marca) {
+      const existingBrand = await brandsCol.findOne({ name: { $regex: `^${marca.trim()}$`, $options: 'i' } });
+      if (existingBrand) {
+        brandId = existingBrand.id;
+      } else {
+        brandId = await nextId('brands');
+        await brandsCol.insertOne({ id: brandId, name: marca.trim(), is_own: 1, color: '#1d4ed8' });
+      }
+    }
+
+    if (await productsCol.findOne({ ean: String(codbar) })) {
+      return res.status(400).json({ error: 'Já existe um produto cadastrado com este EAN.' });
+    }
+
+    const id = await nextId('products');
+    const doc = {
+      id,
+      sku: `SI5-${String(codbar).slice(-6)}`,
+      ean: String(codbar),
+      name: produto,
+      brand_id: brandId,
+      category: categoria || 'Geral',
+      unit: embalagem || 'UN',
+      system_price: Number(preco_medio || 0),
+      min_stock: 10,
+      ideal_facings: 4,
+      active: 1,
+      created_at: nowStr(),
+    };
+    await productsCol.insertOne(doc);
+    await logAudit(req.user, 'SI5_IMPORT', 'products', id, `Produto ${produto} (${codbar}) importado via SI5 Global`);
+    res.status(201).json(doc);
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

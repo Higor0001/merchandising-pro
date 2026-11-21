@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('node:path');
-const { initSchema } = require('./db/database');
+const fs = require('node:fs');
 const { seedIfEmpty } = require('./db/seed');
 const { uploadDir } = require('./middleware/upload');
 
@@ -9,9 +9,6 @@ const authRoutes = require('./routes/auth');
 const storesRoutes = require('./routes/storesRoutes');
 const merchandisingRoutes = require('./routes/merchandisingRoutes');
 const commercialRoutes = require('./routes/commercialRoutes');
-
-initSchema();
-seedIfEmpty();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -21,7 +18,22 @@ app.use(express.json({ limit: '15mb' }));
 app.use('/uploads', express.static(uploadDir));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', app: 'MERCHANDISING PRO API', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    app: 'MERCHANDISING PRO API',
+    database: process.env.MONGODB_URI ? 'MongoDB configurado' : 'MONGODB_URI ausente',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Garantir conexão e seed inicial no MongoDB antes das rotas de API
+app.use('/api', async (_req, res, next) => {
+  try {
+    await seedIfEmpty();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Erro ao conectar no MongoDB.' });
+  }
 });
 
 app.use('/api/auth', authRoutes);
@@ -29,16 +41,24 @@ app.use('/api', storesRoutes);
 app.use('/api', merchandisingRoutes);
 app.use('/api', commercialRoutes);
 
-// Serve frontend build if available
+// Serve frontend build locally when not running on Vercel Services
 const distDir = path.join(__dirname, '..', '..', 'frontend', 'dist');
-app.use(express.static(distDir));
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
-  const indexFile = path.join(distDir, 'index.html');
-  if (require('node:fs').existsSync(indexFile)) {
-    return res.sendFile(indexFile);
-  }
-  next();
+if (!process.env.VERCEL && fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
+    const indexFile = path.join(distDir, 'index.html');
+    if (fs.existsSync(indexFile)) {
+      return res.sendFile(indexFile);
+    }
+    next();
+  });
+}
+
+// Global error handler
+app.use((err, _req, res, _next) => {
+  console.error('API Error:', err);
+  res.status(500).json({ error: err.message || 'Erro interno no servidor.' });
 });
 
 if (require.main === module) {
