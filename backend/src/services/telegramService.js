@@ -15,12 +15,12 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
     const blob = new Blob([buffer], { type: 'image/jpeg' });
 
     const lines = [
-      '📸 *MERCHANDISING PRO — Evidência Fotográfica*',
-      `📌 *Motivo:* ${reason || 'Registro no PDV'}`,
-      storeName ? `🏪 *Loja:* ${storeName}` : null,
-      promoterName ? `👤 *Promotor:* ${promoterName}` : null,
-      details ? `📝 *Descrição:* ${details}` : null,
-      `🕒 *Data/Hora:* ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
+      '📸 MERCHANDISING PRO — Evidência Fotográfica',
+      `📌 Motivo: ${reason || 'Registro no PDV'}`,
+      storeName ? `🏪 Loja: ${storeName}` : null,
+      promoterName ? `👤 Promotor: ${promoterName}` : null,
+      details ? `📝 Descrição: ${details}` : null,
+      `🕒 Data/Hora: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
     ].filter(Boolean);
 
     const caption = lines.join('\n').slice(0, 1020);
@@ -28,7 +28,6 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
     const formData = new FormData();
     formData.append('chat_id', chatId);
     formData.append('caption', caption);
-    formData.append('parse_mode', 'Markdown');
     formData.append('photo', blob, filename);
 
     const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
