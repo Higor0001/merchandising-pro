@@ -49,4 +49,37 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
   }
 }
 
-module.exports = { sendPhotoToTelegram };
+async function sendMessageToTelegram({ text }) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+
+  if (!token || !chatId) {
+    return { sent: false, error: 'TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não configurados.' };
+  }
+  if (!text || !text.trim()) {
+    return { sent: false, error: 'Texto da mensagem está vazio.' };
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text.slice(0, 4096),
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Telegram sendMessage erro:', response.status, errText);
+      return { sent: false, error: errText };
+    }
+    return { sent: true };
+  } catch (err) {
+    console.error('Erro ao enviar texto para o Telegram:', err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+module.exports = { sendPhotoToTelegram, sendMessageToTelegram };

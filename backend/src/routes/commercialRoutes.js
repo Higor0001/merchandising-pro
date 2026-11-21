@@ -4,7 +4,7 @@ const { db } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
-const { sendPhotoToTelegram } = require('../services/telegramService');
+const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -445,6 +445,20 @@ router.get('/reports/:type', (req, res) => {
     default:
       return res.json(db.prepare('SELECT v.scheduled_date as Data, s.name as Loja, v.status as Visita_Status, v.duration_minutes as Duração_Min, v.notes as Notas FROM visits v JOIN stores s ON s.id=v.store_id').all());
   }
+});
+
+// --- TELEGRAM TEXT DISPATCH ---
+router.post('/telegram/send-message', async (req, res) => {
+  const { text } = req.body || {};
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'Texto da mensagem é obrigatório.' });
+  }
+  const result = await sendMessageToTelegram({ text });
+  if (!result.sent) {
+    return res.status(400).json({ error: result.error || 'Falha ao enviar para o Telegram.' });
+  }
+  logAudit(req.user, 'TELEGRAM_TEXT', 'telegram', null, 'Lista de produtos enviada ao Telegram');
+  res.json({ sent: true });
 });
 
 module.exports = router;
