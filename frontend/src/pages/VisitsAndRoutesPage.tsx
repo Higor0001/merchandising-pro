@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks } from 'lucide-react';
+import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks, XCircle } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
 
@@ -86,6 +86,17 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = (
     await loadAll();
   };
 
+  const handleCancelVisit = async (visitId: number) => {
+    const reason = prompt('Motivo do cancelamento da visita (opcional):');
+    if (reason === null) return;
+    await apiFetch(`/visits/${visitId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    if (selectedVisit?.id === visitId) setSelectedVisit(null);
+    await loadAll();
+  };
+
   const handleUploadVisitPhoto = async () => {
     if (!visitPhoto || !selectedVisit) return;
     const fd = new FormData();
@@ -113,7 +124,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = (
   };
 
   if (mode === 'roteiros') {
-    const unattended = visits.filter((v) => v.status === 'Não Atendida' || v.status === 'Pendente');
+    const unattended = visits.filter((v) => v.status === 'Não Atendida' || v.status === 'Pendente' || v.status === 'Cancelada');
     return (
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -249,7 +260,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = (
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                     v.status === 'Concluída' ? 'bg-emerald-100 text-emerald-700' :
                     v.status === 'Em Andamento' ? 'bg-blue-100 text-blue-700' :
-                    v.status === 'Não Atendida' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                    (v.status === 'Não Atendida' || v.status === 'Cancelada') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
                   }`}>
                     {v.status}
                   </span>
@@ -272,6 +283,11 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = (
                   <button onClick={() => openChecklist(v)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1">
                     <ListChecks className="w-3.5 h-3.5" /> Checklist & Detalhes
                   </button>
+                  {(v.status === 'Pendente' || v.status === 'Em Andamento') && (
+                    <button onClick={() => handleCancelVisit(v.id)} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5" /> Cancelar Visita
+                    </button>
+                  )}
                 </div>
               </div>
             );

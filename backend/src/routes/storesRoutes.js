@@ -259,6 +259,26 @@ router.post('/visits/:id/checkout', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.post('/visits/:id/cancel', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const visitsCol = await col('visits');
+    const visit = await visitsCol.findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+
+    const { reason } = req.body || {};
+    const cancelNote = reason ? `Cancelada: ${reason}` : 'Visita cancelada pelo usuário';
+    const newNotes = visit.notes ? `${visit.notes} | ${cancelNote}` : cancelNote;
+
+    await visitsCol.updateOne(
+      { id: vid },
+      { $set: { status: 'Cancelada', notes: newNotes } }
+    );
+    await logAudit(req.user, 'CANCEL', 'visits', vid, cancelNote);
+    res.json(await visitsCol.findOne({ id: vid }, { projection: { _id: 0 } }));
+  } catch (err) { next(err); }
+});
+
 router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next) => {
   try {
     const vid = Number(req.params.id);
