@@ -24,7 +24,10 @@ function nowStr() {
 async function connectDb() {
   if (cachedDb) return cachedDb;
 
-  const uri = process.env.MONGODB_URI;
+  let uri = (process.env.MONGODB_URI || '').trim().replace(/^["']|["']$/g, '');
+  if (uri.startsWith('MONGODB_URI=')) {
+    uri = uri.slice('MONGODB_URI='.length).trim().replace(/^["']|["']$/g, '');
+  }
   if (!uri) {
     throw new Error('MONGODB_URI não configurada nas variáveis de ambiente.');
   }
