@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const multer = require('multer');
+const { v2: cloudinary } = require('cloudinary');
 const { getGridFSBucket } = require('../db/database');
 
 const uploadDir = process.env.VERCEL
@@ -8,6 +9,21 @@ const uploadDir = process.env.VERCEL
   : path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+function isCloudinaryConfigured() {
+  return Boolean(
+    process.env.CLOUDINARY_URL ||
+      (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
+  );
+}
+
+if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
 }
 
 const storage = multer.diskStorage({
@@ -26,6 +42,21 @@ const upload = multer({
 
 async function saveFileToGridFS(file) {
   if (!file || !file.path) return '';
+
+  // 1. Prioridade: Cloudinary (CDN permanente) se configurado
+  if (isCloudinaryConfigured()) {
+    try {
+      const res = await cloudinary.uploader.upload(file.path, {
+        folder: 'merchandising-pro',
+        resource_type: 'image',
+      });
+      if (res?.secure_url) return res.secure_url;
+    } catch (err) {
+      console.error('Cloudinary upload error (usando GridFS como fallback):', err.message);
+    }
+  }
+
+  // 2. Fallback: MongoDB GridFS
   try {
     const bucket = await getGridFSBucket();
     await new Promise((resolve, reject) => {
