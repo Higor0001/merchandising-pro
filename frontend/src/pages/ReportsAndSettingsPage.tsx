@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FileText, FileSpreadsheet, Users, Shield, Package, Tags } from 'lucide-react';
+import { FileText, FileSpreadsheet, Users, Shield, Package, Tags, Search, Download } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { exportToExcel, exportToPDF } from '../services/exportUtils';
 import { useAuth } from '../context/AuthContext';
@@ -31,6 +31,13 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
   const [newBrand, setNewBrand] = useState({ name: '', is_own: true });
   const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '1', category: 'Salgadinhos', system_price: '' });
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
+
+  // SI5 Global API state
+  const [si5Query, setSi5Query] = useState('');
+  const [si5Results, setSi5Results] = useState<any[]>([]);
+  const [si5Loading, setSi5Loading] = useState(false);
+  const [si5Error, setSi5Error] = useState('');
+  const [targetProductId, setTargetProductId] = useState('');
 
   const loadConfig = async () => {
     const [b, p] = await Promise.all([apiFetch('/brands'), apiFetch('/products')]);
@@ -128,6 +135,109 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
       <div>
         <h1 className="text-xl font-extrabold text-slate-900">Configurações, Cadastros & Auditoria</h1>
         <p className="text-sm text-slate-500">Controle de marcas, produtos (EAN), usuários, perfis de acesso e histórico de alterações</p>
+      </div>
+
+      {/* SI5 Global API Integration */}
+      <div className="bg-white p-5 rounded-2xl border border-teal-200 space-y-4">
+        <div>
+          <div className="font-bold text-sm text-teal-900 flex items-center gap-2">
+            <Search className="w-4 h-4 text-teal-600" /> Consultar & Importar Produtos (API SI5 Global)
+          </div>
+          <p className="text-xs text-slate-500">Busque por nome ou GTIN/EAN para importar produtos ou vincular o EAN oficial aos itens PepsiCo</p>
+        </div>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setSi5Loading(true);
+            setSi5Error('');
+            try {
+              const q = si5Query.trim();
+              if (/^\d{8,14}$/.test(q)) {
+                const item = await apiFetch<any>(`/si5/barcode/${q}`);
+                setSi5Results(item?.data ? [item.data] : item ? [item] : []);
+              } else {
+                const res = await apiFetch<any>(`/si5/search?q=${encodeURIComponent(q)}&per_page=10`);
+                setSi5Results(res.data || []);
+              }
+            } catch (err: any) {
+              setSi5Error(err.message || 'Erro ao consultar SI5 Global');
+              setSi5Results([]);
+            } finally {
+              setSi5Loading(false);
+            }
+          }}
+          className="flex flex-wrap gap-2"
+        >
+          <input
+            placeholder="Digite o código EAN/GTIN ou nome (ex: Doritos, Pepsi, 789...)"
+            value={si5Query}
+            onChange={(e) => setSi5Query(e.target.value)}
+            className="flex-1 min-w-[220px] px-3 py-2 border rounded-xl text-xs"
+          />
+          <select
+            value={targetProductId}
+            onChange={(e) => setTargetProductId(e.target.value)}
+            className="px-3 py-2 border rounded-xl text-xs max-w-[240px]"
+          >
+            <option value="">Importar como novo produto</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>Vincular EAN em: {p.name}</option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            disabled={si5Loading}
+            className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold disabled:opacity-60"
+          >
+            {si5Loading ? 'Consultando...' : 'Buscar na SI5'}
+          </button>
+        </form>
+
+        {si5Error && <div className="p-3 rounded-xl bg-red-50 text-red-700 text-xs font-medium">{si5Error}</div>}
+
+        {si5Results.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+            {si5Results.map((item, idx) => (
+              <div key={item.codbar || idx} className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center gap-3">
+                {item.imagem_url && (
+                  <img src={item.imagem_url} alt={item.produto} className="w-14 h-14 object-contain rounded-lg bg-white border p-1 shrink-0" />
+                )}
+                <div className="flex-1 min-w-0 text-xs space-y-0.5">
+                  <div className="font-bold text-slate-900 truncate">{item.produto}</div>
+                  <div className="text-slate-600">EAN: <b>{item.codbar}</b> • Marca: {item.marca || '-'}</div>
+                  <div className="text-slate-500">NCM: {item.ncm || '-'} • CEST: {item.cest_codigo || '-'}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await apiFetch('/si5/import', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          codbar: item.codbar,
+                          produto: item.produto,
+                          marca: item.marca,
+                          categoria: item.categoria,
+                          embalagem: item.embalagem,
+                          preco_medio: item.preco_medio,
+                          target_product_id: targetProductId ? Number(targetProductId) : null,
+                        }),
+                      });
+                      alert(targetProductId ? 'EAN vinculado com sucesso!' : 'Produto importado para o catálogo!');
+                      loadConfig();
+                    } catch (err: any) {
+                      alert(err.message);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold flex items-center gap-1 shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" /> {targetProductId ? 'Vincular' : 'Importar'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Brands & Products */}

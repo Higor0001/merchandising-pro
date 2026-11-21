@@ -4,6 +4,7 @@ const path = require('node:path');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
+const { searchSi5Products, getSi5ProductByBarcode } = require('../services/si5Service');
 
 const router = express.Router();
 router.use(authenticate);
@@ -251,6 +252,76 @@ router.post('/planograms', (req, res) => {
 
   logAudit(req.user, 'CREATE', 'planogram_audits', r.lastInsertRowid, `Planograma ${category} share=${share}%`);
   res.status(201).json({ id: r.lastInsertRowid, share_of_shelf: share, lost_spaces: lost, compliant });
+});
+
+// --- SI5 GLOBAL API INTEGRATION ---
+router.get('/si5/search', async (req, res) => {
+  try {
+    const { q = '', page = 1, per_page = 12 } = req.query;
+    const result = await searchSi5Products({ q, page, per_page });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/si5/barcode/:codbar', async (req, res) => {
+  try {
+    const result = await getSi5ProductByBarcode(req.params.codbar);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/si5/import', (req, res) => {
+  const { codbar, produto, marca, categoria, embalagem, preco_medio, target_product_id } = req.body || {};
+  if (!codbar || !produto) {
+    return res.status(400).json({ error: 'Código de barras (codbar) e nome do produto são obrigatórios.' });
+  }
+
+  // If updating an existing product (e.g. filling official EAN for a PepsiCo item)
+  if (target_product_id) {
+    const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(target_product_id);
+    if (!existing) return res.status(404).json({ error: 'Produto destino não encontrado.' });
+    db.prepare('UPDATE products SET ean = ?, system_price = COALESCE(NULLIF(?, 0), system_price) WHERE id = ?')
+      .run(String(codbar), Number(preco_medio || 0), target_product_id);
+    logAudit(req.user, 'SI5_UPDATE_EAN', 'products', Number(target_product_id), `EAN ${codbar} vinculado via SI5 Global`);
+    return res.json(db.prepare('SELECT * FROM products WHERE id = ?').get(target_product_id));
+  }
+
+  // Match or create brand
+  let brandId = null;
+  if (marca) {
+    const existingBrand = db.prepare('SELECT id FROM brands WHERE LOWER(name) = LOWER(?)').get(marca.trim());
+    if (existingBrand) {
+      brandId = existingBrand.id;
+    } else {
+      const bRes = db.prepare('INSERT INTO brands (name, is_own, color) VALUES (?, 1, ?)').run(marca.trim(), '#1d4ed8');
+      brandId = bRes.lastInsertRowid;
+    }
+  }
+
+  const sku = `SI5-${String(codbar).slice(-6)}`;
+  const existingByEan = db.prepare('SELECT id FROM products WHERE ean = ?').get(String(codbar));
+  if (existingByEan) {
+    return res.status(400).json({ error: 'Já existe um produto cadastrado com este EAN.' });
+  }
+
+  const r = db.prepare(`
+    INSERT INTO products (sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 10, 4)
+  `).run(
+    sku,
+    String(codbar),
+    produto,
+    brandId,
+    categoria || 'Geral',
+    embalagem || 'UN',
+    Number(preco_medio || 0)
+  );
+  logAudit(req.user, 'SI5_IMPORT', 'products', r.lastInsertRowid, `Produto ${produto} (${codbar}) importado via SI5 Global`);
+  res.status(201).json(db.prepare('SELECT * FROM products WHERE id = ?').get(r.lastInsertRowid));
 });
 
 module.exports = router;
