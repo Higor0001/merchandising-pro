@@ -153,17 +153,28 @@ async function upsertSi5ItemsToCatalog(items = []) {
 
 /**
  * Sincroniza o catálogo local de produtos diretamente a partir da API SI5 Global.
+ * Quando `full = true`, percorre todas as páginas disponíveis (per_page = 100) até o fim do catálogo.
  */
-async function syncSi5Catalog({ q = '', pages = 1, per_page = 50 } = {}) {
+async function syncSi5Catalog({ q = '', pages = 1, per_page = 100, full = false } = {}) {
+  const maxPages = full ? 100 : Math.max(1, Number(pages || 1));
+  const pageSize = Math.min(100, Math.max(10, Number(per_page || 100)));
   const allItems = [];
-  for (let p = 1; p <= pages; p++) {
-    const res = await searchSi5Products({ q, page: p, per_page });
+  let pagesFetched = 0;
+
+  for (let p = 1; p <= maxPages; p++) {
+    const res = await searchSi5Products({ q, page: p, per_page: pageSize });
     const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+    pagesFetched++;
     if (list.length === 0) break;
     allItems.push(...list);
-    if (list.length < per_page) break;
+
+    const lastPage = Number(res?.last_page || res?.meta?.last_page || 0);
+    if (lastPage > 0 && p >= lastPage) break;
+    if (list.length < pageSize) break;
   }
-  return upsertSi5ItemsToCatalog(allItems);
+
+  const result = await upsertSi5ItemsToCatalog(allItems);
+  return { ...result, pages_fetched: pagesFetched };
 }
 
 /**

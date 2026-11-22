@@ -155,7 +155,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
               setSi5Error('');
               try {
                 const res = await syncFullCatalogFromSi5(si5Query.trim());
-                alert(`Catálogo SI5 sincronizado e salvo no dispositivo! ${res.products.length} produtos (${res.inserted} novos, ${res.updated} atualizados).`);
+                alert(`Puxada completa da SI5 concluída (${res.pages_fetched} página(s))! ${res.products.length} produtos salvos no banco e no dispositivo (${res.inserted} novos, ${res.updated} atualizados).`);
                 loadConfig();
               } catch (err: any) {
                 setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');
@@ -165,7 +165,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
             }}
             className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold disabled:opacity-60"
           >
-            Sincronizar Catálogo SI5
+            {si5Loading ? 'Puxando catálogo completo...' : 'Puxar Catálogo Completo SI5'}
           </button>
         </div>
 

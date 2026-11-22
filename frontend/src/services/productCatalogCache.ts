@@ -72,16 +72,22 @@ export async function loadProductsWithDeviceCache(forceServer = false): Promise<
 }
 
 /**
- * Sincroniza explicitamente com a API SI5 Global e salva todos os produtos completos no dispositivo.
+ * Puxada completa explícita da API SI5 Global (todas as páginas), salvando no banco de dados e no dispositivo.
+ * Só é executada quando o usuário solicita explicitamente.
  */
-export async function syncFullCatalogFromSi5(query = ''): Promise<{ products: CachedProduct[]; inserted: number; updated: number }> {
-  const res = await apiFetch<{ inserted: number; updated: number }>('/si5/sync', {
+export async function syncFullCatalogFromSi5(query = ''): Promise<{ products: CachedProduct[]; inserted: number; updated: number; pages_fetched: number }> {
+  const res = await apiFetch<{ inserted: number; updated: number; pages_fetched: number }>('/si5/full-pull', {
     method: 'POST',
-    body: JSON.stringify({ q: query, pages: 2, per_page: 50 }),
+    body: JSON.stringify({ q: query }),
   });
   const all = await apiFetch<CachedProduct[]>('/products');
   saveDeviceCatalog(all);
-  return { products: all, inserted: res.inserted || 0, updated: res.updated || 0 };
+  return {
+    products: all,
+    inserted: res.inserted || 0,
+    updated: res.updated || 0,
+    pages_fetched: res.pages_fetched || 1,
+  };
 }
 
 /**

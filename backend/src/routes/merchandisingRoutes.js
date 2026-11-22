@@ -37,25 +37,21 @@ router.post('/brands', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// --- PRODUCTS ---
+// --- PRODUCTS (Somente leitura do banco local; SI5 só é chamada quando solicitada) ---
 router.get('/products', async (req, res, next) => {
   try {
-    const { ean, category, brand_id, sync, q, include_inactive } = req.query;
+    const { ean, category, brand_id, q, include_inactive } = req.query;
     const productsCol = await col('products');
-
-    if (isSi5Configured() && (sync === 'true' || (await productsCol.countDocuments({ active: { $ne: 0 } })) === 0)) {
-      try {
-        await syncSi5Catalog({ q: q ? String(q) : '', pages: 1, per_page: 50 });
-      } catch (err) {
-        console.warn('Aviso ao sincronizar produtos da SI5:', err.message);
-      }
-    }
 
     const filter = {};
     if (include_inactive !== 'true') filter.active = { $ne: 0 };
     if (ean) filter.ean = ean;
     if (category) filter.category = category;
     if (brand_id) filter.brand_id = Number(brand_id);
+    if (q && String(q).trim()) {
+      const regex = { $regex: String(q).trim(), $options: 'i' };
+      filter.$or = [{ name: regex }, { ean: regex }, { sku: regex }, { category: regex }];
+    }
 
     const [products, brands] = await Promise.all([
       productsCol.find(filter, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
@@ -419,13 +415,25 @@ router.get('/si5/barcode/:codbar', async (req, res) => {
 
 router.post('/si5/sync', async (req, res) => {
   try {
-    const { q = '', pages = 2, per_page = 50 } = req.body || {};
+    const { q = '', pages = 2, per_page = 100, full = false } = req.body || {};
     const result = await syncSi5Catalog({
       q: String(q),
-      pages: Math.min(5, Math.max(1, Number(pages || 1))),
-      per_page: Math.min(100, Math.max(10, Number(per_page || 50))),
+      pages: Math.min(100, Math.max(1, Number(pages || 2))),
+      per_page: Math.min(100, Math.max(10, Number(per_page || 100))),
+      full: Boolean(full),
     });
-    await logAudit(req.user, 'SI5_SYNC', 'products', null, `Sincronização SI5: ${result.inserted} novos, ${result.updated} atualizados`);
+    await logAudit(req.user, 'SI5_SYNC', 'products', null, `Sincronização SI5 (${result.pages_fetched} pág): ${result.inserted} novos, ${result.updated} atualizados`);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/si5/full-pull', async (req, res) => {
+  try {
+    const { q = '' } = req.body || {};
+    const result = await syncSi5Catalog({ q: String(q), full: true, per_page: 100 });
+    await logAudit(req.user, 'SI5_FULL_PULL', 'products', null, `Puxada completa SI5 (${result.pages_fetched} páginas): ${result.inserted} novos, ${result.updated} atualizados`);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

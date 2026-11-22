@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Barcode, Search, Package, RefreshCw } from 'lucide-react';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import {
@@ -25,12 +25,28 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
   allowEmpty = false,
   emptyLabel = 'Selecione um produto (Opcional)',
 }) => {
+  const [localFilter, setLocalFilter] = useState('');
   const [si5Query, setSi5Query] = useState('');
   const [searching, setSearching] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
 
+  // Pesquisa 100% local nos produtos salvos no banco/dispositivo (0 solicitações à SI5)
+  const filteredProducts = useMemo(() => {
+    const q = localFilter.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.ean || '').toLowerCase().includes(q) ||
+        (p.sku || '').toLowerCase().includes(q) ||
+        (p.brand_name || '').toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q)
+    );
+  }, [products, localFilter]);
+
   const selectedProduct = products.find((p) => String(p.id) === String(value));
 
+  // Só solicita à API SI5 quando o usuário clicar explicitamente em Buscar SI5 ou ler um EAN inexistente localmente
   const runSi5Lookup = async (query: string) => {
     const q = query.trim();
     if (!q) return;
@@ -43,8 +59,8 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
         onNotify?.(
           'ok',
           fromCache
-            ? `Produto carregado do cache do dispositivo (0 tokens SI5 gastos): ${matched[0].name}`
-            : `${matched.length} produto(s) completo(s) salvo(s) da SI5 no dispositivo: ${matched[0].name}`
+            ? `Produto carregado do cache local (0 tokens SI5 gastos): ${matched[0].name}`
+            : `${matched.length} produto(s) salvo(s) da SI5 no banco e dispositivo: ${matched[0].name}`
         );
       } else {
         onNotify?.('err', `Nenhum produto encontrado na SI5 para "${q}".`);
@@ -58,33 +74,18 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
 
   return (
     <div className="space-y-2.5">
-      {/* Busca rápida na SI5 + Leitor EAN */}
+      {/* 1. Pesquisa Local Instantânea no Catálogo Salvo */}
       <div className="flex flex-wrap gap-2">
-        <div className="flex-1 min-w-[200px] flex gap-1.5">
+        <div className="flex-1 min-w-[200px] relative">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            value={si5Query}
-            onChange={(e) => setSi5Query(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                runSi5Lookup(si5Query);
-              }
-            }}
-            placeholder="Buscar produto ou EAN na SI5 (salvo no dispositivo)..."
-            className="flex-1 px-3 py-2 border border-teal-300 bg-teal-50/40 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+            value={localFilter}
+            onChange={(e) => setLocalFilter(e.target.value)}
+            placeholder={`Pesquisar entre ${products.length} produtos salvos (nome, EAN, marca)...`}
+            className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-xl text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button
-            type="button"
-            disabled={searching || !si5Query.trim()}
-            onClick={() => runSi5Lookup(si5Query)}
-            className="px-3 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1 shrink-0"
-          >
-            {searching ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            Buscar SI5
-          </button>
         </div>
-
         <button
           type="button"
           onClick={() => setScannerOpen(true)}
@@ -94,22 +95,54 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
         </button>
       </div>
 
-      {/* Seletor do Catálogo Completo Salvo */}
+      {/* 2. Seletor dos Produtos Filtrados */}
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white font-medium"
       >
         {allowEmpty && <option value="">{emptyLabel}</option>}
-        {products.length === 0 && !allowEmpty && <option value="">Nenhum produto carregado — busque ou sincronize na SI5</option>}
-        {products.map((p) => (
+        {filteredProducts.length === 0 && !allowEmpty && (
+          <option value="">
+            {products.length === 0
+              ? 'Catálogo vazio — faça a puxada completa da SI5'
+              : `Nenhum produto local para "${localFilter}"`}
+          </option>
+        )}
+        {filteredProducts.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name} {p.ean && p.ean !== 'A CONFERIR' ? `• EAN ${p.ean}` : `(${p.sku})`}
           </option>
         ))}
       </select>
 
-      {/* Ficha Completa do Produto Selecionado */}
+      {/* 3. Solicitação Sob Demanda à API SI5 (apenas quando solicitado) */}
+      <div className="flex gap-1.5">
+        <input
+          type="text"
+          value={si5Query}
+          onChange={(e) => setSi5Query(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              runSi5Lookup(si5Query);
+            }
+          }}
+          placeholder="Não encontrou? Consultar na API SI5 por nome ou EAN..."
+          className="flex-1 px-3 py-1.5 border border-teal-300 bg-teal-50/40 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+        />
+        <button
+          type="button"
+          disabled={searching || !si5Query.trim()}
+          onClick={() => runSi5Lookup(si5Query)}
+          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1 shrink-0"
+        >
+          {searching ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+          Solicitar à SI5
+        </button>
+      </div>
+
+      {/* 4. Ficha Completa do Produto Selecionado */}
       {selectedProduct && (
         <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-3 text-xs">
           {selectedProduct.image_url ? (
