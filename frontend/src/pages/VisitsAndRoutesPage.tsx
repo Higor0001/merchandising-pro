@@ -3,7 +3,7 @@ import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks, XC
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
 
-export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = ({ mode }) => {
+export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpenStore?: (storeId: number) => void }> = ({ mode, onOpenStore }) => {
   const [visits, setVisits] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
@@ -381,9 +381,17 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros' }> = (
                 </div>
 
                 <div className="flex flex-wrap gap-2 pt-1">
+                  {onOpenStore && (
+                    <button
+                      onClick={() => onOpenStore(v.store_id)}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center gap-1"
+                    >
+                      <Play className="w-3.5 h-3.5" /> Abrir Fluxo na Loja
+                    </button>
+                  )}
                   {v.status === 'Pendente' && (
                     <button onClick={() => handleCheckin(v.id)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1">
-                      <Play className="w-3.5 h-3.5" /> Check-in
+                      <Play className="w-3.5 h-3.5" /> Check-in Rápido
                     </button>
                   )}
                   <button onClick={() => openChecklist(v)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1">

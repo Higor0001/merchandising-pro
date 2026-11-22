@@ -139,11 +139,36 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
 
       {/* SI5 Global API Integration */}
       <div className="bg-white p-5 rounded-2xl border border-teal-200 space-y-4">
-        <div>
-          <div className="font-bold text-sm text-teal-900 flex items-center gap-2">
-            <Search className="w-4 h-4 text-teal-600" /> Consultar & Importar Produtos (API SI5 Global)
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="font-bold text-sm text-teal-900 flex items-center gap-2">
+              <Search className="w-4 h-4 text-teal-600" /> Catálogo Oficial via API SI5 Global
+            </div>
+            <p className="text-xs text-slate-500">Todos os produtos do catálogo são sincronizados e consultados a partir da API SI5 Global</p>
           </div>
-          <p className="text-xs text-slate-500">Busque por nome ou GTIN/EAN para importar produtos ou vincular o EAN oficial aos itens PepsiCo</p>
+          <button
+            type="button"
+            disabled={si5Loading}
+            onClick={async () => {
+              setSi5Loading(true);
+              setSi5Error('');
+              try {
+                const res = await apiFetch<any>('/si5/sync', {
+                  method: 'POST',
+                  body: JSON.stringify({ q: si5Query.trim(), pages: 2, per_page: 50 }),
+                });
+                alert(`Catálogo SI5 sincronizado! ${res.inserted} novos, ${res.updated} atualizados.`);
+                loadConfig();
+              } catch (err: any) {
+                setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');
+              } finally {
+                setSi5Loading(false);
+              }
+            }}
+            className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold disabled:opacity-60"
+          >
+            Sincronizar Catálogo SI5
+          </button>
         </div>
 
         <form

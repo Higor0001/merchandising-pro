@@ -203,14 +203,33 @@ router.post('/visits/:id/checkin', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Visita já encerrada não pode receber novo check-in.' });
+    }
+
+    const otherActive = await visitsCol.findOne({
+      store_id: visit.store_id,
+      status: 'Em Andamento',
+      id: { $ne: vid },
+    });
+    if (otherActive) {
+      return res.status(409).json({
+        error: `Já existe uma visita em andamento (#${otherActive.id}) para esta loja. Conclua ou cancele antes de iniciar outra.`,
+      });
+    }
 
     const { lat, lng } = req.body || {};
+    const nextStage = visit.workflow_stage && visit.workflow_stage !== 'IDENTIFICACAO'
+      ? visit.workflow_stage
+      : 'FOTO_INICIAL';
+
     await visitsCol.updateOne(
       { id: vid },
       {
         $set: {
           checkin_at: visit.checkin_at || nowStr(),
           status: 'Em Andamento',
+          workflow_stage: nextStage,
           checkin_lat: lat || null,
           checkin_lng: lng || null,
         },
@@ -231,28 +250,60 @@ router.post('/visits/:id/checkout', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (visit.status === 'Concluída') {
+      return res.status(403).json({ error: 'Esta visita já foi finalizada e não pode ser alterada.' });
+    }
+    if (visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Visita cancelada não pode receber check-out.' });
+    }
+
+    // Regra obrigatória: exigir fotografia inicial, diagnóstico e fotografia final antes de concluir
+    const evidencesCol = await col('visit_evidences');
+    const [initialCount, finalCount, diag] = await Promise.all([
+      evidencesCol.countDocuments({ visit_id: vid, stage: 'INICIAL', is_active: { $ne: 0 } }),
+      evidencesCol.countDocuments({ visit_id: vid, stage: 'FINAL', is_active: { $ne: 0 } }),
+      (await col('visit_diagnostics')).findOne({ visit_id: vid }),
+    ]);
+
+    if (initialCount < 1) {
+      return res.status(400).json({ error: 'Check-out bloqueado: fotografia inicial obrigatória não registrada.' });
+    }
+    if (!diag) {
+      return res.status(400).json({ error: 'Check-out bloqueado: diagnóstico inicial obrigatório não realizado.' });
+    }
+    if (finalCount < 1) {
+      return res.status(400).json({ error: 'Check-out bloqueado: registre pelo menos uma fotografia final (após intervenção) antes de finalizar a visita.' });
+    }
+
+    const { notes, problems_found, opportunities_found, operational_summary } = req.body || {};
 
     const nowDate = new Date();
-    let duration = 45;
+    let duration = 1;
     if (visit.checkin_at) {
       const start = new Date(visit.checkin_at.replace(' ', 'T'));
       const diff = Math.round((nowDate - start) / 60000);
       if (!Number.isNaN(diff) && diff >= 1) duration = diff;
     }
 
-    const { notes, problems_found, opportunities_found } = req.body || {};
+    const checkoutAt = nowStr();
     await visitsCol.updateOne(
       { id: vid },
       {
         $set: {
-          checkout_at: nowStr(),
+          checkout_at: checkoutAt,
           duration_minutes: duration,
           status: 'Concluída',
+          workflow_stage: 'CONCLUIDA',
           notes: notes ?? visit.notes,
           problems_found: problems_found ?? visit.problems_found,
           opportunities_found: opportunities_found ?? visit.opportunities_found,
+          checkout_summary_json: operational_summary ? JSON.stringify(operational_summary) : (visit.checkout_summary_json || null),
         },
       }
+    );
+    await (await col('visit_checklists')).updateOne(
+      { visit_id: vid, item_key: 'fotos_antes_depois' },
+      { $set: { completed: 1, updated_at: checkoutAt } }
     );
     await logAudit(req.user, 'CHECKOUT', 'visits', vid, `Check-out realizado (${duration} min)`);
     res.json(await visitsCol.findOne({ id: vid }, { projection: { _id: 0 } }));

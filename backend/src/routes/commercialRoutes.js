@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
+const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
 const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
@@ -45,7 +46,7 @@ router.get('/prices', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/prices', upload.single('photo'), async (req, res, next) => {
+router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const { visit_id, store_id, product_id, gondola_price, promo_price, has_price_tag, competitor_name, competitor_price, notes } = req.body || {};
     if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
@@ -134,7 +135,7 @@ router.get('/expiries', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/expiries', async (req, res, next) => {
+router.post('/expiries', enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const { visit_id, store_id, product_id, batch_code, expiry_date, quantity, fifo_fefo_applied, condition, removal_requested, estimated_loss, notes } = req.body || {};
     if (!store_id || !product_id || !expiry_date) return res.status(400).json({ error: 'Loja, produto e data de validade são obrigatórios.' });
@@ -305,7 +306,7 @@ router.post('/campaigns', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/campaigns/:id/execute', upload.single('photo'), async (req, res, next) => {
+router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const cid = Number(req.params.id);
     const { store_id, visit_id, compliant, checklist_status, notes } = req.body || {};
@@ -376,7 +377,7 @@ router.get('/occurrences', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/occurrences', upload.single('photo'), async (req, res, next) => {
+router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const { visit_id, store_id, product_id, type, priority, description } = req.body || {};
     if (!store_id || !type || !description) return res.status(400).json({ error: 'Loja, tipo e descrição são obrigatórios.' });

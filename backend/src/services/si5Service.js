@@ -1,7 +1,13 @@
+const { col, nextId, nowStr } = require('../db/database');
+
 const SI5_BASE_URL = 'https://global.si5.com.br/api';
 
 function getToken() {
-  return process.env.SI5_API_TOKEN || '';
+  return (process.env.SI5_API_TOKEN || '').trim();
+}
+
+function isSi5Configured() {
+  return Boolean(getToken());
 }
 
 async function si5Request(path) {
@@ -43,7 +49,132 @@ async function getSi5ProductByBarcode(codbar) {
   return si5Request(`/produtos/${encodeURIComponent(clean)}`);
 }
 
+/**
+ * Normaliza e faz upsert de uma lista de itens da API SI5 na coleção `products`.
+ */
+async function upsertSi5ItemsToCatalog(items = []) {
+  const productsCol = await col('products');
+  const brandsCol = await col('brands');
+  const existingBrands = await brandsCol.find({}).toArray();
+  const brandByLower = new Map(existingBrands.map((b) => [String(b.name || '').trim().toLowerCase(), b.id]));
+
+  let inserted = 0;
+  let updated = 0;
+  const savedProducts = [];
+
+  for (const raw of items) {
+    const ean = String(raw?.codbar || raw?.gtin || raw?.ean || '').trim();
+    const name = String(raw?.produto || raw?.nome || raw?.descricao || '').trim();
+    if (!ean || !name) continue;
+
+    let brandId = null;
+    const brandName = String(raw?.marca || '').trim();
+    if (brandName) {
+      const key = brandName.toLowerCase();
+      if (brandByLower.has(key)) {
+        brandId = brandByLower.get(key);
+      } else {
+        brandId = await nextId('brands');
+        await brandsCol.insertOne({ id: brandId, name: brandName, is_own: 1, color: '#1d4ed8' });
+        brandByLower.set(key, brandId);
+      }
+    }
+
+    const existing = await productsCol.findOne({ ean });
+    const price = Number(raw?.preco_medio || raw?.preco || 0);
+    const category = String(raw?.categoria || 'Geral').trim() || 'Geral';
+    const unit = String(raw?.embalagem || 'UN').trim() || 'UN';
+    const imageUrl = String(raw?.imagem_url || '').trim();
+
+    if (existing) {
+      await productsCol.updateOne(
+        { id: existing.id },
+        {
+          $set: {
+            name,
+            brand_id: brandId ?? existing.brand_id,
+            category,
+            unit,
+            system_price: price > 0 ? price : existing.system_price,
+            image_url: imageUrl || existing.image_url || '',
+            source: 'si5',
+            updated_at: nowStr(),
+          },
+        }
+      );
+      updated++;
+      savedProducts.push(await productsCol.findOne({ id: existing.id }, { projection: { _id: 0 } }));
+    } else {
+      const id = await nextId('products');
+      const doc = {
+        id,
+        sku: `SI5-${ean}`,
+        ean,
+        name,
+        brand_id: brandId,
+        category,
+        unit,
+        system_price: price,
+        image_url: imageUrl,
+        min_stock: 10,
+        ideal_facings: 4,
+        source: 'si5',
+        active: 1,
+        created_at: nowStr(),
+      };
+      await productsCol.insertOne(doc);
+      inserted++;
+      savedProducts.push(doc);
+    }
+  }
+
+  return { inserted, updated, total: savedProducts.length, products: savedProducts };
+}
+
+/**
+ * Sincroniza o catálogo local de produtos diretamente a partir da API SI5 Global.
+ */
+async function syncSi5Catalog({ q = '', pages = 1, per_page = 50 } = {}) {
+  const allItems = [];
+  for (let p = 1; p <= pages; p++) {
+    const res = await searchSi5Products({ q, page: p, per_page });
+    const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+    if (list.length === 0) break;
+    allItems.push(...list);
+    if (list.length < per_page) break;
+  }
+  return upsertSi5ItemsToCatalog(allItems);
+}
+
+/**
+ * Busca um EAN no catálogo local; se não existir, consulta na API SI5 e importa automaticamente.
+ */
+async function resolveAndImportSi5Barcode(codbar) {
+  const clean = String(codbar || '').trim();
+  if (!clean) throw new Error('Código EAN é obrigatório.');
+
+  const productsCol = await col('products');
+  const local = await productsCol.findOne({ ean: clean }, { projection: { _id: 0 } });
+  if (local) return { product: local, from_si5: false };
+
+  const res = await getSi5ProductByBarcode(clean);
+  const item = res?.data || res;
+  if (!item || (!item.codbar && !item.produto)) {
+    throw new Error('Produto não encontrado na base SI5 Global.');
+  }
+
+  const syncRes = await upsertSi5ItemsToCatalog([{ ...item, codbar: item.codbar || clean }]);
+  if (!syncRes.products.length) {
+    throw new Error('Não foi possível importar o produto da SI5 Global.');
+  }
+  return { product: syncRes.products[0], from_si5: true };
+}
+
 module.exports = {
+  isSi5Configured,
   searchSi5Products,
   getSi5ProductByBarcode,
+  upsertSi5ItemsToCatalog,
+  syncSi5Catalog,
+  resolveAndImportSi5Barcode,
 };

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Store, Plus, History, Bot, X } from 'lucide-react';
+import { Store, Plus, History, Bot, X, ArrowRight } from 'lucide-react';
 import { apiFetch } from '../services/api';
 
-export const StoresPage: React.FC = () => {
+export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> = ({ onOpenStore }) => {
   const [stores, setStores] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -92,12 +92,22 @@ export const StoresPage: React.FC = () => {
               <div><b>Região / Rota:</b> {s.region} • {s.route_name}</div>
               <div><b>Contato:</b> {s.contact_name || '-'} ({s.contact_phone || '-'})</div>
             </div>
-            <button
-              onClick={() => openHistory(s.id)}
-              className="w-full py-2 bg-slate-50 hover:bg-blue-50 text-blue-700 text-xs font-bold rounded-xl border border-slate-200 flex items-center justify-center gap-1.5"
-            >
-              <History className="w-4 h-4" /> Ver Histórico & Resumo IA
-            </button>
+            <div className="flex gap-2">
+              {onOpenStore && (
+                <button
+                  onClick={() => onOpenStore(s.id)}
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5"
+                >
+                  Abrir Operação <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button
+                onClick={() => openHistory(s.id)}
+                className="flex-1 py-2 bg-slate-50 hover:bg-blue-50 text-blue-700 text-xs font-bold rounded-xl border border-slate-200 flex items-center justify-center gap-1.5"
+              >
+                <History className="w-4 h-4" /> Resumo IA
+              </button>
+            </div>
           </div>
         ))}
       </div>

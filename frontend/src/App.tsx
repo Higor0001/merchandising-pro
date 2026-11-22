@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { VisitsAndRoutesPage } from './pages/VisitsAndRoutesPage';
 import { StoresPage } from './pages/StoresPage';
+import { StoreOperationalPage } from './pages/StoreOperationalPage';
 import { ReplenishmentPage } from './pages/ReplenishmentPage';
 import { DisplayAndPlanogramPage } from './pages/DisplayAndPlanogramPage';
 import { PricingAndCompetitorsPage } from './pages/PricingAndCompetitorsPage';
@@ -17,19 +18,28 @@ import { ReportsAndSettingsPage } from './pages/ReportsAndSettingsPage';
 const AppContent: React.FC = () => {
   const { user } = useAuth();
   const [page, setPage] = useState<MenuId>('dashboard');
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
 
   if (!user) return <LoginPage />;
 
+  const handleNavigate = (nextPage: MenuId) => {
+    setSelectedStoreId(null);
+    setPage(nextPage);
+  };
+
   const renderPage = () => {
+    if (selectedStoreId !== null) {
+      return <StoreOperationalPage storeId={selectedStoreId} onBack={() => setSelectedStoreId(null)} />;
+    }
     switch (page) {
       case 'dashboard':
-        return <DashboardPage onNavigate={setPage} />;
+        return <DashboardPage onNavigate={handleNavigate} onOpenStore={setSelectedStoreId} />;
       case 'visitas':
-        return <VisitsAndRoutesPage mode="visitas" />;
+        return <VisitsAndRoutesPage mode="visitas" onOpenStore={setSelectedStoreId} />;
       case 'roteiros':
-        return <VisitsAndRoutesPage mode="roteiros" />;
+        return <VisitsAndRoutesPage mode="roteiros" onOpenStore={setSelectedStoreId} />;
       case 'lojas':
-        return <StoresPage />;
+        return <StoresPage onOpenStore={setSelectedStoreId} />;
       case 'abastecimento':
         return <ReplenishmentPage />;
       case 'exposicao':
@@ -59,12 +69,12 @@ const AppContent: React.FC = () => {
       case 'configuracoes':
         return <ReportsAndSettingsPage mode="configuracoes" />;
       default:
-        return <DashboardPage onNavigate={setPage} />;
+        return <DashboardPage onNavigate={handleNavigate} onOpenStore={setSelectedStoreId} />;
     }
   };
 
   return (
-    <Layout activePage={page} onNavigate={setPage}>
+    <Layout activePage={page} onNavigate={handleNavigate}>
       {renderPage()}
     </Layout>
   );

@@ -1,4 +1,5 @@
 const { col, nextId, nowStr, hashPassword } = require('./database');
+const { isSi5Configured, syncSi5Catalog } = require('../services/si5Service');
 
 const DEFAULT_CHECKLIST_ITEMS = [
   { key: 'loja_visitada', label: 'Loja visitada (Check-in realizado)' },
@@ -90,45 +91,14 @@ async function seedIfEmpty() {
     }
     await brandsCol.insertMany(brandDocs);
 
-    // 25 Produtos de referência PepsiCo Brasil
-    const pepsicoProducts = [
-      ['PEP-001', 'Baconzitos', 'Salgadinhos', 'Baconzitos 36 g', 'Pacote'],
-      ['PEP-002', 'Cebolitos', 'Salgadinhos', 'Cebolitos 35 g', 'Pacote'],
-      ['PEP-003', 'Cheetos', 'Snacks de milho', 'Cheetos Onda Requeijão 40 g', 'Pacote'],
-      ['PEP-004', 'Cheetos', 'Snacks de milho', 'Cheetos Lua Parmesão 35 g', 'Pacote'],
-      ['PEP-005', 'Doritos', 'Snacks de milho', 'Doritos Queijo Nacho 32 g', 'Pacote'],
-      ['PEP-006', 'Doritos', 'Snacks de milho', 'Doritos Queijo Nacho 75 g', 'Pacote'],
-      ['PEP-007', 'Doritos', 'Snacks de milho', 'Doritos Queijo Nacho 120 g', 'Pacote'],
-      ['PEP-008', 'Fandangos', 'Snacks de milho', 'Fandangos Presunto 35 g', 'Pacote'],
-      ['PEP-009', 'Fandangos', 'Snacks de milho', 'Fandangos Queijo 35 g', 'Pacote'],
-      ['PEP-010', 'Lay’s', 'Batatas chips', 'Lay’s Clássica 62 g', 'Pacote'],
-      ['PEP-011', 'Lay’s', 'Batatas chips', 'Lay’s Sour Cream 62 g', 'Pacote'],
-      ['PEP-012', 'Ruffles', 'Batatas chips', 'Ruffles Original 68 g', 'Pacote'],
-      ['PEP-013', 'Ruffles', 'Batatas chips', 'Ruffles Original 115 g', 'Pacote'],
-      ['PEP-014', 'Torcida', 'Snacks de trigo', 'Torcida Pimenta Mexicana 35 g', 'Pacote'],
-      ['PEP-015', 'Torcida', 'Snacks de trigo', 'Torcida Pimenta Mexicana 100 g', 'Pacote'],
-      ['PEP-016', 'Quaker', 'Aveias e cereais', 'Aveia em Flocos Finos 165 g', 'Pacote'],
-      ['PEP-017', 'Quaker', 'Aveias e cereais', 'Aveia em Flocos Finos 450 g', 'Pacote'],
-      ['PEP-018', 'Gatorade', 'Bebidas esportivas', 'Gatorade Laranja 500 ml', 'Garrafa'],
-      ['PEP-019', 'Gatorade', 'Bebidas esportivas', 'Gatorade Limão 500 ml', 'Garrafa'],
-      ['PEP-020', 'Gatorade', 'Bebidas esportivas', 'Gatorade Uva 500 ml', 'Garrafa'],
-      ['PEP-021', 'Pepsi', 'Refrigerantes', 'Pepsi Lata 350 ml', 'Lata'],
-      ['PEP-022', 'Pepsi', 'Refrigerantes', 'Pepsi 2 L', 'Garrafa PET'],
-      ['PEP-023', 'H2OH!', 'Refrigerantes', 'H2OH! Limoneto 500 ml', 'Garrafa'],
-      ['PEP-024', 'Toddynho', 'Bebidas lácteas', 'Toddynho Chocolate 200 ml', 'Caixinha'],
-      ['PEP-025', 'Toddy', 'Achocolatados', 'Toddy Original 370 g', 'Pote/Pacote'],
-    ];
-    const productsCol = await col('products');
-    const productDocs = [];
-    for (const [sku, brand, category, name, unit] of pepsicoProducts) {
-      productDocs.push({
-        id: await nextId('products'),
-        sku, ean: 'A CONFERIR', name, brand_id: brandIdMap[brand],
-        category, unit, system_price: 0, min_stock: 10, ideal_facings: 4,
-        active: 1, created_at: createdAt,
-      });
+    // Catálogo de produtos alimentado exclusivamente pela API SI5 Global
+    if (isSi5Configured()) {
+      try {
+        await syncSi5Catalog({ q: '', pages: 1, per_page: 50 });
+      } catch (err) {
+        console.warn('Aviso ao sincronizar catálogo inicial da SI5:', err.message);
+      }
     }
-    await productsCol.insertMany(productDocs);
   })().catch((err) => {
     seedPromise = null;
     throw err;

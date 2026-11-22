@@ -3,11 +3,13 @@ const cors = require('cors');
 const path = require('node:path');
 const fs = require('node:fs');
 const { seedIfEmpty } = require('./db/seed');
+const { runIncrementalMigrations } = require('./db/migrations');
 const { getGridFSBucket } = require('./db/database');
 const { uploadDir } = require('./middleware/upload');
 
 const authRoutes = require('./routes/auth');
 const storesRoutes = require('./routes/storesRoutes');
+const visitWorkflowRoutes = require('./routes/visitWorkflowRoutes');
 const merchandisingRoutes = require('./routes/merchandisingRoutes');
 const commercialRoutes = require('./routes/commercialRoutes');
 
@@ -45,10 +47,11 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Garantir conexão e seed inicial no MongoDB antes das rotas de API
+// Garantir conexão, seed inicial e migrations incrementais no MongoDB antes das rotas de API
 app.use('/api', async (_req, res, next) => {
   try {
     await seedIfEmpty();
+    await runIncrementalMigrations();
     next();
   } catch (err) {
     res.status(500).json({ error: err.message || 'Erro ao conectar no MongoDB.' });
@@ -56,6 +59,7 @@ app.use('/api', async (_req, res, next) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api', visitWorkflowRoutes);
 app.use('/api', storesRoutes);
 app.use('/api', merchandisingRoutes);
 app.use('/api', commercialRoutes);

@@ -2,9 +2,16 @@ const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { authenticate, logAudit } = require('../middleware/auth');
+const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
-const { searchSi5Products, getSi5ProductByBarcode } = require('../services/si5Service');
+const {
+  isSi5Configured,
+  searchSi5Products,
+  getSi5ProductByBarcode,
+  syncSi5Catalog,
+  resolveAndImportSi5Barcode,
+} = require('../services/si5Service');
 
 const router = express.Router();
 router.use(authenticate);
@@ -33,14 +40,24 @@ router.post('/brands', async (req, res, next) => {
 // --- PRODUCTS ---
 router.get('/products', async (req, res, next) => {
   try {
-    const { ean, category, brand_id } = req.query;
+    const { ean, category, brand_id, sync, q } = req.query;
+    const productsCol = await col('products');
+
+    if (isSi5Configured() && (sync === 'true' || (await productsCol.countDocuments()) === 0)) {
+      try {
+        await syncSi5Catalog({ q: q ? String(q) : '', pages: 1, per_page: 50 });
+      } catch (err) {
+        console.warn('Aviso ao sincronizar produtos da SI5:', err.message);
+      }
+    }
+
     const filter = {};
     if (ean) filter.ean = ean;
     if (category) filter.category = category;
     if (brand_id) filter.brand_id = Number(brand_id);
 
     const [products, brands] = await Promise.all([
-      (await col('products')).find(filter, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
+      productsCol.find(filter, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       (await col('brands')).find({}).toArray(),
     ]);
     const brandMap = Object.fromEntries(brands.map((b) => [b.id, b]));
@@ -123,7 +140,7 @@ router.get('/replenishments', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/replenishments', async (req, res, next) => {
+router.post('/replenishments', enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const { visit_id, store_id, product_id, quantity_replenished, backroom_stock, gondola_stock, status, increase_exposure_opportunity, notes } = req.body || {};
     if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
@@ -217,6 +234,7 @@ router.get('/displays', async (req, res, next) => {
 router.post(
   '/displays',
   upload.fields([{ name: 'photo_before', maxCount: 1 }, { name: 'photo_after', maxCount: 1 }]),
+  enforceVisitExecutionIntegrity,
   async (req, res, next) => {
     try {
       const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
@@ -341,7 +359,7 @@ router.get('/planograms', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/planograms', async (req, res, next) => {
+router.post('/planograms', enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
     const { visit_id, store_id, category, brand_id, product_id, ideal_facings, actual_facings, total_category_facings, competitor_facings, position_level, notes } = req.body || {};
     if (!store_id || !category) return res.status(400).json({ error: 'Loja e categoria são obrigatórias.' });
@@ -392,6 +410,34 @@ router.get('/si5/search', async (req, res) => {
 router.get('/si5/barcode/:codbar', async (req, res) => {
   try {
     const result = await getSi5ProductByBarcode(req.params.codbar);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/si5/sync', async (req, res) => {
+  try {
+    const { q = '', pages = 2, per_page = 50 } = req.body || {};
+    const result = await syncSi5Catalog({
+      q: String(q),
+      pages: Math.min(5, Math.max(1, Number(pages || 1))),
+      per_page: Math.min(100, Math.max(10, Number(per_page || 50))),
+    });
+    await logAudit(req.user, 'SI5_SYNC', 'products', null, `Sincronização SI5: ${result.inserted} novos, ${result.updated} atualizados`);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/si5/resolve-ean', async (req, res) => {
+  try {
+    const { ean } = req.body || {};
+    const result = await resolveAndImportSi5Barcode(ean);
+    if (result.from_si5) {
+      await logAudit(req.user, 'SI5_RESOLVE_EAN', 'products', result.product.id, `Produto ${result.product.name} (${ean}) importado via SI5`);
+    }
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
