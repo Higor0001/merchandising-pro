@@ -60,6 +60,7 @@ async function buildOperationalSummary(visitId, storeId) {
   const unresolvedPendencies = occurrences.filter((o) => o.status !== 'Resolvida');
   const checklistDone = checklists.filter((c) => c.completed).length;
 
+  const selfieEntradaPhotos = evidences.filter((e) => e.stage === 'SELFIE_ENTRADA');
   const initialPhotos = evidences.filter((e) => e.stage === 'INICIAL');
   const complementaryPhotos = evidences.filter((e) => e.stage === 'COMPLEMENTAR');
   const finalPhotos = evidences.filter((e) => e.stage === 'FINAL');
@@ -95,6 +96,7 @@ async function buildOperationalSummary(visitId, storeId) {
     checklist_total: checklists.length,
     checklist_done: checklistDone,
     evidences: {
+      selfie_entrada: selfieEntradaPhotos,
       initial: initialPhotos,
       complementary: complementaryPhotos,
       final: finalPhotos,
@@ -226,6 +228,7 @@ router.get('/stores/:id/operational', async (req, res, next) => {
         promoter_name: userMap[v.promoter_id] || 'Promotor',
         diagnostic: diagMap[v.id] || null,
         evidences: {
+          selfie_entrada: vEvs.filter((e) => e.stage === 'SELFIE_ENTRADA'),
           initial: vEvs.filter((e) => e.stage === 'INICIAL'),
           complementary: vEvs.filter((e) => e.stage === 'COMPLEMENTAR'),
           final: vEvs.filter((e) => e.stage === 'FINAL'),
@@ -381,7 +384,7 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
       return res.status(400).json({ error: 'Captura de fotografia obrigatória. Fotos antigas não são aceitas.' });
     }
 
-    const stage = ['INICIAL', 'COMPLEMENTAR', 'FINAL'].includes(req.body?.stage) ? req.body.stage : 'COMPLEMENTAR';
+    const stage = ['SELFIE_ENTRADA', 'INICIAL', 'COMPLEMENTAR', 'FINAL'].includes(req.body?.stage) ? req.body.stage : 'COMPLEMENTAR';
     const area = req.body?.area || 'Gôndola Principal';
     const caption = req.body?.caption || `Foto ${stage} — ${area}`;
     const capturedAt = nowStr();
@@ -454,14 +457,14 @@ router.post('/visits/:id/confirm-initial-photo', async (req, res, next) => {
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
 
-    const initialCount = await (await col('visit_evidences')).countDocuments({
-      visit_id: vid,
-      stage: 'INICIAL',
-      is_active: { $ne: 0 },
-    });
-    if (initialCount < 1) {
+    const evCol = await col('visit_evidences');
+    const [selfieCount, initialCount] = await Promise.all([
+      evCol.countDocuments({ visit_id: vid, stage: 'SELFIE_ENTRADA', is_active: { $ne: 0 } }),
+      evCol.countDocuments({ visit_id: vid, stage: 'INICIAL', is_active: { $ne: 0 } }),
+    ]);
+    if (selfieCount < 1 || initialCount < 1) {
       return res.status(400).json({
-        error: 'O sistema não libera o diagnóstico sem a fotografia inicial registrada.',
+        error: 'O sistema não libera o diagnóstico sem a selfie em frente ao estabelecimento e a fotografia inicial da gôndola registradas.',
       });
     }
 
@@ -491,15 +494,15 @@ router.post('/visits/:id/diagnostic', async (req, res, next) => {
       return res.status(403).json({ error: 'Visita encerrada não pode ter diagnóstico alterado.' });
     }
 
-    // Regra rígida: exigir foto inicial antes do diagnóstico
-    const initialCount = await (await col('visit_evidences')).countDocuments({
-      visit_id: vid,
-      stage: 'INICIAL',
-      is_active: { $ne: 0 },
-    });
-    if (initialCount < 1) {
+    // Regra rígida: exigir selfie na entrada e foto inicial antes do diagnóstico
+    const evCol = await col('visit_evidences');
+    const [selfieCount, initialCount] = await Promise.all([
+      evCol.countDocuments({ visit_id: vid, stage: 'SELFIE_ENTRADA', is_active: { $ne: 0 } }),
+      evCol.countDocuments({ visit_id: vid, stage: 'INICIAL', is_active: { $ne: 0 } }),
+    ]);
+    if (selfieCount < 1 || initialCount < 1) {
       return res.status(400).json({
-        error: 'Bloqueio de segurança: registre a Fotografia Inicial obrigatória antes de realizar o Diagnóstico.',
+        error: 'Bloqueio de segurança: registre a Selfie em frente ao estabelecimento e a Fotografia Inicial obrigatória antes de realizar o Diagnóstico.',
       });
     }
 

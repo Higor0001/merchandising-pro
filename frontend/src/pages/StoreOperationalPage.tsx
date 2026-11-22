@@ -76,7 +76,8 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const [brands, setBrands] = useState<any[]>([]);
   const [syncingSi5, setSyncingSi5] = useState(false);
 
-  // Step 2: Initial & Complementary Photo states
+  // Step 2: Selfie + Initial & Complementary Photo states
+  const [selfieFile, setSelfieFile] = useState<File | null>(null);
   const [initialArea, setInitialArea] = useState('Gôndola Principal');
   const [initialFile, setInitialFile] = useState<File | null>(null);
   const [compArea, setCompArea] = useState('Ponto Extra');
@@ -254,7 +255,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   };
 
   // Etapa 2 / 5: Upload de Evidência
-  const handleUploadEvidence = async (stage: 'INICIAL' | 'COMPLEMENTAR' | 'FINAL', file: File | null, area: string) => {
+  const handleUploadEvidence = async (stage: 'SELFIE_ENTRADA' | 'INICIAL' | 'COMPLEMENTAR' | 'FINAL', file: File | null, area: string) => {
     if (!file || !workflow?.visit) return;
     setUploadingPhoto(true);
     try {
@@ -262,13 +263,14 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
       fd.append('photo', file);
       fd.append('stage', stage);
       fd.append('area', area);
-      fd.append('caption', `Evidência ${stage} - ${area}`);
+      fd.append('caption', stage === 'SELFIE_ENTRADA' ? 'Selfie em frente ao estabelecimento' : `Evidência ${stage} - ${area}`);
       await apiFetch(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
+      if (stage === 'SELFIE_ENTRADA') setSelfieFile(null);
       if (stage === 'INICIAL') setInitialFile(null);
       if (stage === 'COMPLEMENTAR') setCompFile(null);
       if (stage === 'FINAL') setFinalFile(null);
       await refreshWorkflow(workflow.visit.id);
-      notify('ok', `Fotografia ${stage.toLowerCase()} registrada com data/hora e vinculada à loja!`);
+      notify('ok', stage === 'SELFIE_ENTRADA' ? 'Selfie na entrada do estabelecimento registrada!' : `Fotografia ${stage.toLowerCase()} registrada com data/hora e vinculada à loja!`);
     } catch (err: any) {
       notify('err', err.message);
     } finally {
@@ -528,10 +530,13 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const activeStage = viewStage || currentBackendStage;
   const maxUnlockedIdx = activeVisit && activeVisit.status === 'Em Andamento' ? stageIndex(currentBackendStage) : 0;
 
+  const selfiePhotos = workflow?.summary?.evidences?.selfie_entrada || [];
   const initialPhotos = workflow?.summary?.evidences?.initial || [];
   const complementaryPhotos = workflow?.summary?.evidences?.complementary || [];
   const finalPhotos = workflow?.summary?.evidences?.final || [];
+  const hasSelfieEntrada = selfiePhotos.length > 0;
   const hasInitialPhoto = initialPhotos.length > 0;
+  const canProceedToDiagnostic = hasSelfieEntrada && hasInitialPhoto;
   const hasFinalPhoto = finalPhotos.length > 0;
   const hasDiagnostic = Boolean(workflow?.summary?.diagnostic);
 
@@ -696,15 +701,78 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     Etapa Obrigatória
                   </span>
                   <h2 className="text-base font-extrabold text-slate-900 mt-1">
-                    Etapa 2 — Fotografia Inicial (Antes da Intervenção)
+                    Etapa 2 — Selfie na Entrada & Fotografia Inicial (Antes da Intervenção)
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Fotografe a gôndola/área exatamente como encontrou antes de abastecer ou organizar. Fotos antigas não são permitidas.
+                    Registre sua selfie em frente ao estabelecimento e fotografe a gôndola/área exatamente como encontrou antes de abastecer ou organizar.
                   </p>
                 </div>
               </div>
 
+              {/* 2.1 Selfie em frente ao estabelecimento (Obrigatória) */}
+              <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-200 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-extrabold text-indigo-900 uppercase">
+                      1. Selfie em frente ao estabelecimento (Obrigatória)
+                    </div>
+                    <p className="text-[11px] text-indigo-700">
+                      Comprove sua presença na fachada/entrada da loja {store.name}.
+                    </p>
+                  </div>
+                  {hasSelfieEntrada && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                      Registrada
+                    </span>
+                  )}
+                </div>
+
+                <PhotoInput
+                  label="Tirar Selfie em frente ao estabelecimento"
+                  file={selfieFile}
+                  onFileSelect={setSelfieFile}
+                  facingMode="user"
+                  cameraOnly
+                  large
+                />
+
+                {selfieFile && (
+                  <button
+                    disabled={uploadingPhoto}
+                    onClick={() => handleUploadEvidence('SELFIE_ENTRADA', selfieFile, 'Fachada / Entrada do Estabelecimento')}
+                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-sm"
+                  >
+                    <Camera className="w-4 h-4" />
+                    {uploadingPhoto ? 'Salvando selfie...' : 'Salvar Selfie na Entrada'}
+                  </button>
+                )}
+
+                {selfiePhotos.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {selfiePhotos.map((ev: any) => (
+                      <div key={ev.id} className="p-3 rounded-xl border border-emerald-200 bg-white flex gap-3 items-center">
+                        <img src={ev.photo_url} alt="Selfie na entrada" className="w-20 h-20 object-cover rounded-lg border" />
+                        <div className="flex-1 min-w-0 text-xs">
+                          <div className="font-bold text-slate-900">Selfie na Entrada</div>
+                          <div className="text-slate-500">{ev.captured_at}</div>
+                          <button
+                            type="button"
+                            onClick={() => handleRetakeEvidence(ev.id)}
+                            className="mt-1.5 inline-flex items-center gap-1 text-amber-700 font-bold hover:underline"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Refazer
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="text-xs font-extrabold text-slate-800 uppercase">
+                  2. Fotografia Inicial da Gôndola / Área (Obrigatória)
+                </div>
                 <label className="block text-xs font-bold text-slate-700">Área Fotografada</label>
                 <select
                   value={initialArea}
@@ -801,20 +869,26 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                 )}
               </div>
 
-              {!hasInitialPhoto && (
+              {!canProceedToDiagnostic && (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800 flex items-center gap-2">
                   <ShieldAlert className="w-4 h-4 shrink-0" />
-                  Bloqueio ativo: O sistema não libera o Diagnóstico enquanto a fotografia inicial não estiver registrada.
+                  <span>
+                    Bloqueio ativo: O sistema não libera o Diagnóstico enquanto {!hasSelfieEntrada && !hasInitialPhoto
+                      ? 'a selfie em frente ao estabelecimento e a fotografia inicial da gôndola'
+                      : !hasSelfieEntrada
+                      ? 'a selfie em frente ao estabelecimento'
+                      : 'a fotografia inicial da gôndola'} não estiver registrada.
+                  </span>
                 </div>
               )}
 
               <button
                 type="button"
-                disabled={!hasInitialPhoto}
+                disabled={!canProceedToDiagnostic}
                 onClick={handleConfirmInitialPhoto}
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-extrabold rounded-2xl flex items-center justify-center gap-2 text-base"
               >
-                Confirmar Fotografia Inicial e Liberar Diagnóstico <ArrowRight className="w-5 h-5" />
+                Confirmar Selfie + Foto Inicial e Liberar Diagnóstico <ArrowRight className="w-5 h-5" />
               </button>
             </div>
           )}
@@ -1593,9 +1667,22 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     <div className="p-2.5 rounded-xl bg-slate-50">Ocorrências: <b>{v.occurrences.length}</b></div>
                   </div>
 
-                  {/* Fotos Iniciais x Finais */}
-                  {(v.evidences.initial.length > 0 || v.evidences.final.length > 0) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Selfie na Entrada + Fotos Iniciais x Finais */}
+                  {((v.evidences.selfie_entrada?.length || 0) > 0 || v.evidences.initial.length > 0 || v.evidences.final.length > 0) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {(v.evidences.selfie_entrada?.length || 0) > 0 && (
+                        <div>
+                          <div className="text-[11px] font-bold text-indigo-700 uppercase mb-1">Selfie na Entrada</div>
+                          <div className="flex flex-wrap gap-2">
+                            {v.evidences.selfie_entrada.map((p: any) => (
+                              <div key={p.id} className="w-28">
+                                <img src={p.photo_url} alt="Selfie" className="w-28 h-20 object-cover rounded-lg border border-indigo-200" />
+                                <div className="text-[10px] text-slate-500 truncate">{p.captured_at}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div>
                         <div className="text-[11px] font-bold text-slate-500 uppercase mb-1">Fotos Iniciais</div>
                         <div className="flex flex-wrap gap-2">

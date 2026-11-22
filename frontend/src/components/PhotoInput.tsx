@@ -6,6 +6,7 @@ interface PhotoInputProps {
   onFileSelect: (file: File | null) => void;
   file?: File | null;
   cameraOnly?: boolean;
+  facingMode?: 'user' | 'environment';
   large?: boolean;
 }
 
@@ -13,7 +14,7 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
   label = 'Capturar / Anexar Foto',
   onFileSelect,
   file,
-  cameraOnly = false,
+  facingMode = 'environment',
   large = false,
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
@@ -59,7 +60,7 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
           <input
             type="file"
             accept="image/*"
-            capture={cameraOnly ? 'environment' : 'environment'}
+            capture={facingMode}
             className="hidden"
             onChange={handleChange}
           />
@@ -89,7 +90,7 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
               <input
                 type="file"
                 accept="image/*"
-                capture="environment"
+                capture={facingMode}
                 className="hidden"
                 onChange={handleChange}
               />
