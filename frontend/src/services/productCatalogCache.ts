@@ -1,8 +1,23 @@
 import { apiFetch } from './api';
 
-const CATALOG_KEY = 'merchpro_si5_catalog_v1';
-const CATALOG_SYNC_AT_KEY = 'merchpro_si5_catalog_synced_at_v1';
-const SEARCH_CACHE_KEY = 'merchpro_si5_search_cache_v1';
+const CATALOG_KEY = 'merchpro_si5_catalog_v2';
+const CATALOG_SYNC_AT_KEY = 'merchpro_si5_catalog_synced_at_v2';
+const SEARCH_CACHE_KEY = 'merchpro_si5_search_cache_v2';
+
+export function clearAllSearchAndCatalogCache() {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith('merchpro_si5_') || k.startsWith('merchpro_cache_'))) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+}
 
 export interface CachedProduct {
   id: number;

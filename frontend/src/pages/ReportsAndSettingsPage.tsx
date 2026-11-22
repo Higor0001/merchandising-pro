@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileText, FileSpreadsheet, Users, Shield, Package, Tags, Search, Download } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { exportToExcel, exportToPDF } from '../services/exportUtils';
-import { syncFullCatalogFromSi5 } from '../services/productCatalogCache';
+import { clearAllSearchAndCatalogCache, syncFullCatalogFromSi5 } from '../services/productCatalogCache';
 import { useAuth } from '../context/AuthContext';
 
 const REPORT_TYPES = [
@@ -147,26 +147,42 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
             </div>
             <p className="text-xs text-slate-500">Todos os produtos do catálogo são sincronizados e consultados a partir da API SI5 Global</p>
           </div>
-          <button
-            type="button"
-            disabled={si5Loading}
-            onClick={async () => {
-              setSi5Loading(true);
-              setSi5Error('');
-              try {
-                const res = await syncFullCatalogFromSi5(si5Query.trim());
-                alert(`Puxada completa da SI5 concluída (${res.pages_fetched} página(s))! ${res.products.length} produtos salvos no banco e no dispositivo (${res.inserted} novos, ${res.updated} atualizados).`);
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                clearAllSearchAndCatalogCache();
+                setSi5Query('');
+                setSi5Results([]);
+                setSi5Error('');
+                alert('Todas as pesquisas realizadas e o cache local foram limpos!');
                 loadConfig();
-              } catch (err: any) {
-                setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');
-              } finally {
-                setSi5Loading(false);
-              }
-            }}
-            className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold disabled:opacity-60"
-          >
-            {si5Loading ? 'Puxando catálogo completo...' : 'Puxar Catálogo Completo SI5'}
-          </button>
+              }}
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+            >
+              Limpar Pesquisas
+            </button>
+            <button
+              type="button"
+              disabled={si5Loading}
+              onClick={async () => {
+                setSi5Loading(true);
+                setSi5Error('');
+                try {
+                  const res = await syncFullCatalogFromSi5(si5Query.trim());
+                  alert(`Puxada completa da SI5 concluída (${res.pages_fetched} página(s))! ${res.products.length} produtos salvos no banco e no dispositivo (${res.inserted} novos, ${res.updated} atualizados).`);
+                  loadConfig();
+                } catch (err: any) {
+                  setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');
+                } finally {
+                  setSi5Loading(false);
+                }
+              }}
+              className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold disabled:opacity-60"
+            >
+              {si5Loading ? 'Puxando catálogo completo...' : 'Puxar Catálogo Completo SI5'}
+            </button>
+          </div>
         </div>
 
         <form
