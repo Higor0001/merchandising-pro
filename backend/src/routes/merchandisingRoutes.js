@@ -40,10 +40,10 @@ router.post('/brands', async (req, res, next) => {
 // --- PRODUCTS ---
 router.get('/products', async (req, res, next) => {
   try {
-    const { ean, category, brand_id, sync, q } = req.query;
+    const { ean, category, brand_id, sync, q, include_inactive } = req.query;
     const productsCol = await col('products');
 
-    if (isSi5Configured() && (sync === 'true' || (await productsCol.countDocuments()) === 0)) {
+    if (isSi5Configured() && (sync === 'true' || (await productsCol.countDocuments({ active: { $ne: 0 } })) === 0)) {
       try {
         await syncSi5Catalog({ q: q ? String(q) : '', pages: 1, per_page: 50 });
       } catch (err) {
@@ -52,6 +52,7 @@ router.get('/products', async (req, res, next) => {
     }
 
     const filter = {};
+    if (include_inactive !== 'true') filter.active = { $ne: 0 };
     if (ean) filter.ean = ean;
     if (category) filter.category = category;
     if (brand_id) filter.brand_id = Number(brand_id);
@@ -439,6 +440,25 @@ router.post('/si5/resolve-ean', async (req, res) => {
       await logAudit(req.user, 'SI5_RESOLVE_EAN', 'products', result.product.id, `Produto ${result.product.name} (${ean}) importado via SI5`);
     }
     res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Busca na SI5 por texto ou EAN, já salva tudo no banco local e retorna os produtos completos
+router.post('/si5/search-and-cache', async (req, res) => {
+  try {
+    const { q = '', per_page = 20 } = req.body || {};
+    const query = String(q).trim();
+    if (!query) return res.status(400).json({ error: 'Informe um nome ou código EAN para buscar na SI5.' });
+
+    if (/^\d{8,14}$/.test(query)) {
+      const resolved = await resolveAndImportSi5Barcode(query);
+      return res.json({ products: [resolved.product], from_si5: resolved.from_si5 });
+    }
+
+    const result = await syncSi5Catalog({ q: query, pages: 1, per_page: Math.min(50, Number(per_page || 20)) });
+    res.json({ products: result.products, inserted: result.inserted, updated: result.updated });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

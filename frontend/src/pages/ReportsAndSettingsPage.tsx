@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileText, FileSpreadsheet, Users, Shield, Package, Tags, Search, Download } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { exportToExcel, exportToPDF } from '../services/exportUtils';
+import { syncFullCatalogFromSi5 } from '../services/productCatalogCache';
 import { useAuth } from '../context/AuthContext';
 
 const REPORT_TYPES = [
@@ -153,11 +154,8 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
               setSi5Loading(true);
               setSi5Error('');
               try {
-                const res = await apiFetch<any>('/si5/sync', {
-                  method: 'POST',
-                  body: JSON.stringify({ q: si5Query.trim(), pages: 2, per_page: 50 }),
-                });
-                alert(`Catálogo SI5 sincronizado! ${res.inserted} novos, ${res.updated} atualizados.`);
+                const res = await syncFullCatalogFromSi5(si5Query.trim());
+                alert(`Catálogo SI5 sincronizado e salvo no dispositivo! ${res.products.length} produtos (${res.inserted} novos, ${res.updated} atualizados).`);
                 loadConfig();
               } catch (err: any) {
                 setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');

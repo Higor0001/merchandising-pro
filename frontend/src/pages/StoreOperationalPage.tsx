@@ -12,7 +12,6 @@ import {
   CalendarClock,
   Tag,
   Bell,
-  Barcode,
   Clock,
   Lock,
   ArrowRight,
@@ -22,11 +21,17 @@ import {
   Square,
   ShieldAlert,
   Sparkles,
+  RefreshCw,
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { PhotoInput } from '../components/PhotoInput';
-import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import {
+  loadProductsWithDeviceCache,
+  syncFullCatalogFromSi5,
+  type CachedProduct,
+} from '../services/productCatalogCache';
 
 interface StoreOperationalPageProps {
   storeId: number;
@@ -67,8 +72,9 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
   const [storeData, setStoreData] = useState<any>(null);
   const [workflow, setWorkflow] = useState<any>(null);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
+  const [syncingSi5, setSyncingSi5] = useState(false);
 
   // Step 2: Initial & Complementary Photo states
   const [initialArea, setInitialArea] = useState('Gôndola Principal');
@@ -106,7 +112,6 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
   // Step 4: Execution sub-tabs
   const [execTab, setExecTab] = useState<'checklist' | 'abastecimento' | 'exposicao' | 'validade' | 'preco' | 'ocorrencia'>('abastecimento');
-  const [scannerOpen, setScannerOpen] = useState(false);
   const [newCheckItem, setNewCheckItem] = useState('');
 
   const [repForm, setRepForm] = useState({
@@ -178,7 +183,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     try {
       const [op, prods, brs] = await Promise.all([
         apiFetch(`/stores/${storeId}/operational`),
-        apiFetch('/products'),
+        loadProductsWithDeviceCache(false),
         apiFetch('/brands'),
       ]);
       setStoreData(op);
@@ -311,27 +316,22 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     }
   };
 
-  // Etapa 4: Ações de Execução
-  const handleEanDetected = async (ean: string) => {
-    const found = products.find((p) => p.ean === ean || p.sku === ean);
-    if (found) {
-      setRepForm((f) => ({ ...f, product_id: String(found.id) }));
-      notify('ok', `Produto identificado pelo EAN: ${found.name}`);
-      return;
-    }
+  // Etapa 4: Sincronizar Catálogo Completo da SI5 para o Dispositivo
+  const handleSyncSi5ToDevice = async () => {
+    setSyncingSi5(true);
     try {
-      const res = await apiFetch<{ product: any; from_si5: boolean }>('/si5/resolve-ean', {
-        method: 'POST',
-        body: JSON.stringify({ ean }),
-      });
-      if (res?.product) {
-        const updatedProducts = await apiFetch('/products');
-        setProducts(updatedProducts);
-        setRepForm((f) => ({ ...f, product_id: String(res.product.id) }));
-        notify('ok', `Produto importado da SI5 Global: ${res.product.name}`);
+      const res = await syncFullCatalogFromSi5('');
+      setProducts(res.products);
+      if (res.products.length > 0) {
+        setRepForm((f) => ({ ...f, product_id: f.product_id || String(res.products[0].id) }));
+        setValForm((f) => ({ ...f, product_id: f.product_id || String(res.products[0].id) }));
+        setPriceForm((f) => ({ ...f, product_id: f.product_id || String(res.products[0].id) }));
       }
+      notify('ok', `Catálogo completo SI5 salvo no dispositivo (${res.products.length} produtos; ${res.inserted} novos, ${res.updated} atualizados).`);
     } catch (err: any) {
-      notify('err', err.message || `EAN ${ean} não encontrado na base SI5 Global.`);
+      notify('err', err.message || 'Erro ao sincronizar catálogo da SI5.');
+    } finally {
+      setSyncingSi5(false);
     }
   };
 
@@ -992,13 +992,25 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     Todas as atividades abaixo estão vinculadas automaticamente à loja <b>{store.name}</b> e visita <b>#{activeVisit.id}</b>.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleGoToFinalPhoto}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl flex items-center gap-1.5"
-                >
-                  Ir para Fotografia Final <ArrowRight className="w-4 h-4" />
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={syncingSi5}
+                    onClick={handleSyncSi5ToDevice}
+                    className="px-3 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center gap-1.5"
+                    title="Carrega todos os produtos completos da SI5 e salva neste dispositivo"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${syncingSi5 ? 'animate-spin' : ''}`} />
+                    {syncingSi5 ? 'Sincronizando SI5...' : `Catálogo no Dispositivo (${products.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleGoToFinalPhoto}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl flex items-center gap-1.5"
+                  >
+                    Ir para Fotografia Final <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {!hasDiagnostic && (
@@ -1035,24 +1047,13 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
               {execTab === 'abastecimento' && (
                 <form onSubmit={handleSaveReplenishment} className="space-y-3">
-                  <div className="flex gap-2">
-                    <select
-                      value={repForm.product_id}
-                      onChange={(e) => setRepForm({ ...repForm, product_id: e.target.value })}
-                      className="flex-1 px-3 py-2.5 border rounded-xl text-sm"
-                    >
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setScannerOpen(true)}
-                      className="px-3.5 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0"
-                    >
-                      <Barcode className="w-4 h-4" /> Ler EAN
-                    </button>
-                  </div>
+                  <ProductSelectorWithSi5
+                    products={products}
+                    value={repForm.product_id}
+                    onChange={(pid) => setRepForm({ ...repForm, product_id: pid })}
+                    onCatalogUpdated={setProducts}
+                    onNotify={notify}
+                  />
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div>
@@ -1168,21 +1169,19 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
               {execTab === 'validade' && (
                 <form onSubmit={handleSaveExpiry} className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <select
-                      value={valForm.product_id}
-                      onChange={(e) => setValForm({ ...valForm, product_id: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm sm:col-span-2"
-                    >
-                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                    <input
-                      placeholder="Lote"
-                      value={valForm.batch_code}
-                      onChange={(e) => setValForm({ ...valForm, batch_code: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm"
-                    />
-                  </div>
+                  <ProductSelectorWithSi5
+                    products={products}
+                    value={valForm.product_id}
+                    onChange={(pid) => setValForm({ ...valForm, product_id: pid })}
+                    onCatalogUpdated={setProducts}
+                    onNotify={notify}
+                  />
+                  <input
+                    placeholder="Lote"
+                    value={valForm.batch_code}
+                    onChange={(e) => setValForm({ ...valForm, batch_code: e.target.value })}
+                    className="w-full px-3 py-2 border rounded-xl text-sm"
+                  />
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-center">
                     <input
                       type="date"
@@ -1231,13 +1230,13 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
               {execTab === 'preco' && (
                 <form onSubmit={handleSavePrice} className="space-y-3">
-                  <select
+                  <ProductSelectorWithSi5
+                    products={products}
                     value={priceForm.product_id}
-                    onChange={(e) => setPriceForm({ ...priceForm, product_id: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-xl text-sm"
-                  >
-                    {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+                    onChange={(pid) => setPriceForm({ ...priceForm, product_id: pid })}
+                    onCatalogUpdated={setProducts}
+                    onNotify={notify}
+                  />
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-center">
                     <input
                       type="number"
@@ -1279,7 +1278,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
               {execTab === 'ocorrencia' && (
                 <form onSubmit={handleSaveOccurrence} className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <select
                       value={occForm.type}
                       onChange={(e) => setOccForm({ ...occForm, type: e.target.value })}
@@ -1296,15 +1295,16 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     >
                       {['Alta', 'Média', 'Baixa'].map((p) => <option key={p}>{p}</option>)}
                     </select>
-                    <select
-                      value={occForm.product_id}
-                      onChange={(e) => setOccForm({ ...occForm, product_id: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm"
-                    >
-                      <option value="">Produto (Opcional)</option>
-                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
                   </div>
+                  <ProductSelectorWithSi5
+                    products={products}
+                    value={occForm.product_id}
+                    onChange={(pid) => setOccForm({ ...occForm, product_id: pid })}
+                    onCatalogUpdated={setProducts}
+                    onNotify={notify}
+                    allowEmpty
+                    emptyLabel="Produto (Opcional)"
+                  />
                   <textarea
                     required
                     rows={2}
@@ -1645,11 +1645,6 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
         </div>
       )}
 
-      <BarcodeScannerModal
-        open={scannerOpen}
-        onClose={() => setScannerOpen(false)}
-        onDetected={handleEanDetected}
-      />
     </div>
   );
 };

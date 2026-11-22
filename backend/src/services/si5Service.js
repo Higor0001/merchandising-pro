@@ -85,6 +85,9 @@ async function upsertSi5ItemsToCatalog(items = []) {
     const category = String(raw?.categoria || 'Geral').trim() || 'Geral';
     const unit = String(raw?.embalagem || 'UN').trim() || 'UN';
     const imageUrl = String(raw?.imagem_url || '').trim();
+    const ncm = String(raw?.ncm || '').trim();
+    const cestCodigo = String(raw?.cest_codigo || '').trim();
+    const cestDescricao = String(raw?.cest_descricao || '').trim();
 
     if (existing) {
       await productsCol.updateOne(
@@ -97,7 +100,12 @@ async function upsertSi5ItemsToCatalog(items = []) {
             unit,
             system_price: price > 0 ? price : existing.system_price,
             image_url: imageUrl || existing.image_url || '',
+            ncm: ncm || existing.ncm || '',
+            cest_codigo: cestCodigo || existing.cest_codigo || '',
+            cest_descricao: cestDescricao || existing.cest_descricao || '',
+            si5_raw: raw,
             source: 'si5',
+            active: 1,
             updated_at: nowStr(),
           },
         }
@@ -116,6 +124,10 @@ async function upsertSi5ItemsToCatalog(items = []) {
         unit,
         system_price: price,
         image_url: imageUrl,
+        ncm,
+        cest_codigo: cestCodigo,
+        cest_descricao: cestDescricao,
+        si5_raw: raw,
         min_stock: 10,
         ideal_facings: 4,
         source: 'si5',
@@ -126,6 +138,14 @@ async function upsertSi5ItemsToCatalog(items = []) {
       inserted++;
       savedProducts.push(doc);
     }
+  }
+
+  // Ocultar itens legados sem EAN ('A CONFERIR') das listas ativas quando houver produtos reais da SI5
+  if (savedProducts.length > 0) {
+    await productsCol.updateMany(
+      { ean: 'A CONFERIR', active: { $ne: 0 } },
+      { $set: { active: 0, deactivated_reason: 'Substituído por catálogo SI5' } }
+    );
   }
 
   return { inserted, updated, total: savedProducts.length, products: savedProducts };
