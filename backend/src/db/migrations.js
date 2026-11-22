@@ -1,4 +1,5 @@
-const { col } = require('./database');
+const { col, nextId, nowStr } = require('./database');
+const pepsicoCatalog = require('./pepsico_catalog_si5.json');
 
 let migrationPromise = null;
 
@@ -49,11 +50,57 @@ async function runIncrementalMigrations() {
       { $set: { workflow_stage: 'CANCELADA' } }
     );
 
-    // 3. Ocultar produtos legados sem EAN ('A CONFERIR') das listas ativas (preservando histórico)
-    await (await col('products')).updateMany(
-      { ean: 'A CONFERIR', active: { $ne: 0 } },
-      { $set: { active: 0, deactivated_reason: 'Substituído por catálogo SI5' } }
-    );
+    // 3. Substituir catálogo antigo pelos 409 itens limpos da planilha SI5 (executado uma única vez)
+    const countersCol = await col('counters');
+    const alreadyReplaced = await countersCol.findOne({ _id: 'migration_pepsico_si5_clean_v1' });
+    if (!alreadyReplaced && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+      const productsCol = await col('products');
+      const brandsCol = await col('brands');
+
+      await productsCol.deleteMany({});
+
+      const existingBrands = await brandsCol.find({}).toArray();
+      const brandByLower = new Map(existingBrands.map((b) => [String(b.name || '').trim().toLowerCase(), b.id]));
+      const createdAt = nowStr();
+      const docs = [];
+
+      for (const item of pepsicoCatalog) {
+        const brandName = String(item.brand || 'PepsiCo').trim();
+        const bKey = brandName.toLowerCase();
+        let brandId = brandByLower.get(bKey);
+        if (!brandId) {
+          brandId = await nextId('brands');
+          await brandsCol.insertOne({ id: brandId, name: brandName, is_own: 1, color: '#1d4ed8' });
+          brandByLower.set(bKey, brandId);
+        }
+
+        const id = await nextId('products');
+        docs.push({
+          id,
+          sku: `SI5-${item.ean}`,
+          ean: item.ean,
+          name: item.name,
+          brand_id: brandId,
+          category: item.category || 'MERCEARIA',
+          unit: item.unit || 'UN',
+          weight: item.weight || '',
+          system_price: Number(item.system_price || 0),
+          ncm: item.ncm || '',
+          cest_codigo: item.cest_codigo || '',
+          image_url: item.image_url || '',
+          min_stock: 10,
+          ideal_facings: 4,
+          source: 'si5',
+          active: 1,
+          created_at: createdAt,
+        });
+      }
+
+      if (docs.length > 0) {
+        await productsCol.insertMany(docs);
+      }
+      await countersCol.insertOne({ _id: 'migration_pepsico_si5_clean_v1', seq: docs.length, migrated_at: createdAt });
+    }
   })().catch((err) => {
     migrationPromise = null;
     console.error('Erro ao executar migrations incrementais:', err.message);

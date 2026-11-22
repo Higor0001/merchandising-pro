@@ -1,8 +1,8 @@
 import { apiFetch } from './api';
 
-const CATALOG_KEY = 'merchpro_si5_catalog_v2';
-const CATALOG_SYNC_AT_KEY = 'merchpro_si5_catalog_synced_at_v2';
-const SEARCH_CACHE_KEY = 'merchpro_si5_search_cache_v2';
+const CATALOG_KEY = 'merchpro_si5_catalog_v3';
+const CATALOG_SYNC_AT_KEY = 'merchpro_si5_catalog_synced_at_v3';
+const SEARCH_CACHE_KEY = 'merchpro_si5_search_cache_v3';
 
 export function clearAllSearchAndCatalogCache() {
   try {
