@@ -107,6 +107,23 @@ export async function syncFullCatalogFromSi5(query = ''): Promise<{ products: Ca
 }
 
 /**
+ * Importa gratuitamente todo o catálogo PepsiCo a partir do Open Food Facts e salva no banco e no dispositivo.
+ */
+export async function pullPepsicoFromOpenFoodFacts(): Promise<{ products: CachedProduct[]; inserted: number; updated: number; brands_processed: number }> {
+  const res = await apiFetch<{ inserted: number; updated: number; brands_processed: number }>('/openfoodfacts/pull-pepsico', {
+    method: 'POST',
+  });
+  const all = await apiFetch<CachedProduct[]>('/products');
+  saveDeviceCatalog(all);
+  return {
+    products: all,
+    inserted: res.inserted || 0,
+    updated: res.updated || 0,
+    brands_processed: res.brands_processed || 0,
+  };
+}
+
+/**
  * Busca por nome ou EAN: verifica primeiro no cache do dispositivo e no histórico de buscas;
  * só consulta a API SI5 se não estiver salvo localmente, salvando o retorno completo no dispositivo.
  */

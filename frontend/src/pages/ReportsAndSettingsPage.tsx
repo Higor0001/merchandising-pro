@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileText, FileSpreadsheet, Users, Shield, Package, Tags, Search, Download } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { exportToExcel, exportToPDF } from '../services/exportUtils';
-import { clearAllSearchAndCatalogCache, syncFullCatalogFromSi5 } from '../services/productCatalogCache';
+import { clearAllSearchAndCatalogCache, pullPepsicoFromOpenFoodFacts, syncFullCatalogFromSi5 } from '../services/productCatalogCache';
 import { useAuth } from '../context/AuthContext';
 
 const REPORT_TYPES = [
@@ -161,6 +161,26 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
             >
               Limpar Pesquisas
+            </button>
+            <button
+              type="button"
+              disabled={si5Loading}
+              onClick={async () => {
+                setSi5Loading(true);
+                setSi5Error('');
+                try {
+                  const res = await pullPepsicoFromOpenFoodFacts();
+                  alert(`Catálogo PepsiCo importado gratuitamente via Open Food Facts! ${res.products.length} produtos no catálogo (${res.inserted} novos, ${res.updated} atualizados).`);
+                  loadConfig();
+                } catch (err: any) {
+                  setSi5Error(err.message || 'Erro ao importar catálogo PepsiCo.');
+                } finally {
+                  setSi5Loading(false);
+                }
+              }}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold disabled:opacity-60"
+            >
+              {si5Loading ? 'Importando...' : 'Importar PepsiCo (Open Food Facts - Grátis)'}
             </button>
             <button
               type="button"

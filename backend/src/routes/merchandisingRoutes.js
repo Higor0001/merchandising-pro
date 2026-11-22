@@ -12,6 +12,7 @@ const {
   syncSi5Catalog,
   resolveAndImportSi5Barcode,
 } = require('../services/si5Service');
+const { pullPepsicoFromOpenFoodFacts } = require('../services/openFoodFactsService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -469,6 +470,17 @@ router.post('/si5/search-and-cache', async (req, res) => {
     res.json({ products: result.products, inserted: result.inserted, updated: result.updated });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// --- OPEN FOOD FACTS (CARGA GRATUITA CATÁLOGO PEPSICO) ---
+router.post('/openfoodfacts/pull-pepsico', async (req, res, next) => {
+  try {
+    const result = await pullPepsicoFromOpenFoodFacts();
+    await logAudit(req.user, 'OFF_PULL_PEPSICO', 'products', null, `Carga Open Food Facts PepsiCo: ${result.inserted} novos, ${result.updated} atualizados`);
+    res.json(result);
+  } catch (err) {
+    next(err);
   }
 });
 
