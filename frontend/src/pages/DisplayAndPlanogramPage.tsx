@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Layers, Grid3X3, Sparkles } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
+import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-extras' | 'planogramas' }> = ({ mode }) => {
   const [displays, setDisplays] = useState<any[]>([]);
   const [planograms, setPlanograms] = useState<{ rows: any[]; indicators: any }>({ rows: [], indicators: { byBrand: [], byCategory: [], byStore: [] } });
   const [stores, setStores] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
 
   const [photoBefore, setPhotoBefore] = useState<File | null>(null);
   const [photoAfter, setPhotoAfter] = useState<File | null>(null);
@@ -43,7 +44,7 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
       apiFetch('/planograms'),
       apiFetch('/stores'),
       apiFetch('/brands'),
-      apiFetch('/products'),
+      loadProductsWithDeviceCache(false),
     ]);
     setDisplays(d);
     setPlanograms(pl);

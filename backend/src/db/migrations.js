@@ -48,6 +48,12 @@ async function runIncrementalMigrations() {
       { workflow_stage: { $exists: false }, status: 'Cancelada' },
       { $set: { workflow_stage: 'CANCELADA' } }
     );
+
+    // 3. Ocultar produtos legados sem EAN ('A CONFERIR') das listas ativas (preservando histórico)
+    await (await col('products')).updateMany(
+      { ean: 'A CONFERIR', active: { $ne: 0 } },
+      { $set: { active: 0, deactivated_reason: 'Substituído por catálogo SI5' } }
+    );
   })().catch((err) => {
     migrationPromise = null;
     console.error('Erro ao executar migrations incrementais:', err.message);

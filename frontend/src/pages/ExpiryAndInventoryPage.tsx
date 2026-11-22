@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarClock, Boxes } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }> = ({ mode }) => {
   const [expiries, setExpiries] = useState<any[]>([]);
   const [inventory, setInventory] = useState<{ stock: any[]; movements: any[] }>({ stock: [], movements: [] });
   const [stores, setStores] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
 
   const [expForm, setExpForm] = useState({
     store_id: '',
@@ -34,7 +36,7 @@ export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }>
       apiFetch('/expiries'),
       apiFetch('/inventory'),
       apiFetch('/stores'),
-      apiFetch('/products'),
+      loadProductsWithDeviceCache(false),
     ]);
     setExpiries(ex);
     setInventory(inv);
@@ -101,12 +103,15 @@ export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }>
           <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
             <CalendarClock className="w-4 h-4 text-rose-600" /> Conferir Validade / Avaria
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <ProductSelectorWithSi5
+            products={products}
+            value={expForm.product_id}
+            onChange={(pid) => setExpForm({ ...expForm, product_id: pid })}
+            onCatalogUpdated={setProducts}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <select value={expForm.store_id} onChange={(e) => setExpForm({ ...expForm, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
               {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <select value={expForm.product_id} onChange={(e) => setExpForm({ ...expForm, product_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-              {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
             <input placeholder="Lote" value={expForm.batch_code} onChange={(e) => setExpForm({ ...expForm, batch_code: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
             <input type="date" required value={expForm.expiry_date} onChange={(e) => setExpForm({ ...expForm, expiry_date: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
@@ -177,12 +182,15 @@ export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }>
         <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
           <Boxes className="w-4 h-4 text-blue-600" /> Movimentação / Separação para Merchandising
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <ProductSelectorWithSi5
+          products={products}
+          value={movForm.product_id}
+          onChange={(pid) => setMovForm({ ...movForm, product_id: pid })}
+          onCatalogUpdated={setProducts}
+        />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <select value={movForm.store_id} onChange={(e) => setMovForm({ ...movForm, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={movForm.product_id} onChange={(e) => setMovForm({ ...movForm, product_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <select value={movForm.movement_type} onChange={(e) => setMovForm({ ...movForm, movement_type: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
             {['Separação Merchandising', 'Entrada', 'Saída', 'Ajuste Inventário'].map((m) => <option key={m}>{m}</option>)}

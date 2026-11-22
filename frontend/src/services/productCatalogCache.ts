@@ -25,7 +25,8 @@ export interface CachedProduct {
 export function getDeviceCatalog(): CachedProduct[] {
   try {
     const raw = localStorage.getItem(CATALOG_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const list: CachedProduct[] = raw ? JSON.parse(raw) : [];
+    return list.filter((p) => p.ean && p.ean !== 'A CONFERIR');
   } catch {
     return [];
   }

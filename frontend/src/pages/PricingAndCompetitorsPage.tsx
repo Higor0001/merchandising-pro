@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Tag, TrendingUp } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'concorrencia' }> = ({ mode }) => {
   const [rows, setRows] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
   const [photo, setPhoto] = useState<File | null>(null);
   const [form, setForm] = useState({
     store_id: '',
@@ -20,7 +22,7 @@ export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'conco
   });
 
   const load = async () => {
-    const [r, s, p] = await Promise.all([apiFetch('/prices'), apiFetch('/stores'), apiFetch('/products')]);
+    const [r, s, p] = await Promise.all([apiFetch('/prices'), apiFetch('/stores'), loadProductsWithDeviceCache(false)]);
     setRows(r);
     setStores(s);
     setProducts(p);
@@ -55,18 +57,21 @@ export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'conco
           {mode === 'concorrencia' ? <TrendingUp className="w-4 h-4 text-amber-600" /> : <Tag className="w-4 h-4 text-blue-600" />}
           Registrar Pesquisa de Preço
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <select value={form.store_id} onChange={(e) => setForm({ ...form, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {products.map((p) => <option key={p.id} value={p.id}>{p.name} (Sist: R$ {Number(p.system_price).toFixed(2)})</option>)}
           </select>
           <label className="flex items-center gap-2 px-3 py-2 border rounded-xl text-sm cursor-pointer">
             <input type="checkbox" checked={form.has_price_tag} onChange={(e) => setForm({ ...form, has_price_tag: e.target.checked })} className="w-4 h-4 accent-blue-600" />
             Possui etiqueta na gôndola
           </label>
         </div>
+        <ProductSelectorWithSi5
+          products={products}
+          value={form.product_id}
+          onChange={(pid) => setForm({ ...form, product_id: pid })}
+          onCatalogUpdated={setProducts}
+        />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <input type="number" step="0.01" placeholder="Preço Gôndola (R$)" value={form.gondola_price} onChange={(e) => setForm({ ...form, gondola_price: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
           <input type="number" step="0.01" placeholder="Preço Promocional (R$)" value={form.promo_price} onChange={(e) => setForm({ ...form, promo_price: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />

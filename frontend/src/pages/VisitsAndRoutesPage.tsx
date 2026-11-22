@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks, XCircle } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpenStore?: (storeId: number) => void }> = ({ mode, onOpenStore }) => {
   const [visits, setVisits] = useState<any[]>([]);
@@ -45,7 +47,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       apiFetch('/visits'),
       apiFetch('/routes'),
       apiFetch('/stores'),
-      apiFetch('/products'),
+      loadProductsWithDeviceCache(false),
       apiFetch('/brands'),
       apiFetch('/campaigns'),
     ]);
@@ -498,9 +500,12 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
 
                 {activeActionTab === 'preco' && (
                   <form onSubmit={handleSubmitPrice} className="space-y-2">
-                    <select value={priceForm.product_id} onChange={(e) => setPriceForm({ ...priceForm, product_id: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs">
-                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                    <ProductSelectorWithSi5
+                      products={products as CachedProduct[]}
+                      value={priceForm.product_id}
+                      onChange={(pid) => setPriceForm({ ...priceForm, product_id: pid })}
+                      onCatalogUpdated={setProducts}
+                    />
                     <div className="grid grid-cols-2 gap-2">
                       <input type="number" step="0.01" placeholder="Preço Gôndola (R$)" value={priceForm.gondola_price} onChange={(e) => setPriceForm({ ...priceForm, gondola_price: e.target.value })} className="px-2.5 py-1.5 border rounded-xl text-xs" />
                       <label className="flex items-center gap-1.5 text-xs">

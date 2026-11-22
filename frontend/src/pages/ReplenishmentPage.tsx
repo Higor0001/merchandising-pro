@@ -4,13 +4,20 @@ import { apiFetch } from '../services/api';
 import { exportToPDF } from '../services/exportUtils';
 import { useAuth } from '../context/AuthContext';
 import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import {
+  loadProductsWithDeviceCache,
+  searchOrResolveSi5WithDeviceCache,
+  type CachedProduct,
+} from '../services/productCatalogCache';
 
 export const ReplenishmentPage: React.FC = () => {
   const { user } = useAuth();
   const [rows, setRows] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [searchingSi5Quick, setSearchingSi5Quick] = useState(false);
 
   // Quick multi-select checklist for Telegram text / PDF
   const [quickStoreId, setQuickStoreId] = useState('');
@@ -32,7 +39,7 @@ export const ReplenishmentPage: React.FC = () => {
   });
 
   const load = async () => {
-    const [r, s, p] = await Promise.all([apiFetch('/replenishments'), apiFetch('/stores'), apiFetch('/products')]);
+    const [r, s, p] = await Promise.all([apiFetch('/replenishments'), apiFetch('/stores'), loadProductsWithDeviceCache(false)]);
     setRows(r);
     setStores(s);
     setProducts(p);
@@ -128,13 +135,33 @@ export const ReplenishmentPage: React.FC = () => {
     alert('Texto copiado para a área de transferência!');
   };
 
-  const handleBarcode = (ean: string) => {
-    const found = products.find((p) => p.ean === ean);
-    if (found) {
-      setForm((f) => ({ ...f, product_id: String(found.id) }));
-      if (!selectedIds.includes(found.id)) setSelectedIds((prev) => [...prev, found.id]);
-    } else {
-      alert(`Produto com EAN ${ean} não encontrado no catálogo.`);
+  const handleBarcode = async (ean: string) => {
+    try {
+      const { matched, allProducts } = await searchOrResolveSi5WithDeviceCache(ean, products);
+      setProducts(allProducts);
+      if (matched.length > 0) {
+        setForm((f) => ({ ...f, product_id: String(matched[0].id) }));
+        if (!selectedIds.includes(matched[0].id)) setSelectedIds((prev) => [...prev, matched[0].id]);
+      } else {
+        alert(`Produto com EAN ${ean} não encontrado na SI5.`);
+      }
+    } catch (err: any) {
+      alert(err.message || `Produto com EAN ${ean} não encontrado na SI5.`);
+    }
+  };
+
+  const handleQuickSi5Search = async () => {
+    const q = quickSearch.trim();
+    if (!q) return;
+    setSearchingSi5Quick(true);
+    try {
+      const { matched, allProducts } = await searchOrResolveSi5WithDeviceCache(q, products);
+      setProducts(allProducts);
+      if (matched.length === 0) alert(`Nenhum produto encontrado na SI5 para "${q}".`);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao consultar SI5.');
+    } finally {
+      setSearchingSi5Quick(false);
     }
   };
 
@@ -191,14 +218,24 @@ export const ReplenishmentPage: React.FC = () => {
               'Produtos Sem Preço',
             ].map((st) => <option key={st}>{st}</option>)}
           </select>
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              placeholder="Filtrar produto ou marca..."
-              value={quickSearch}
-              onChange={(e) => setQuickSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 border rounded-xl text-sm"
-            />
+          <div className="flex gap-1.5">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                placeholder="Filtrar local ou buscar na SI5..."
+                value={quickSearch}
+                onChange={(e) => setQuickSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border rounded-xl text-sm"
+              />
+            </div>
+            <button
+              type="button"
+              disabled={searchingSi5Quick || !quickSearch.trim()}
+              onClick={handleQuickSi5Search}
+              className="px-3 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shrink-0"
+            >
+              {searchingSi5Quick ? '...' : 'SI5'}
+            </button>
           </div>
         </div>
 
@@ -288,17 +325,20 @@ export const ReplenishmentPage: React.FC = () => {
         <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
           <PackagePlus className="w-4 h-4 text-blue-600" /> Registrar Abastecimento Individual no PDV
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <select value={form.store_id} onChange={(e) => setForm({ ...form, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.ean})</option>)}
           </select>
           <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
             {['Abastecido', 'Ruptura', 'Baixo Estoque', 'Indisponível'].map((st) => <option key={st}>{st}</option>)}
           </select>
         </div>
+        <ProductSelectorWithSi5
+          products={products}
+          value={form.product_id}
+          onChange={(pid) => setForm({ ...form, product_id: pid })}
+          onCatalogUpdated={setProducts}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
