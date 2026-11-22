@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Megaphone, AlertTriangle, Plus, CheckCircle2 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
+import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 const OCCURRENCE_TYPES = [
   'Ruptura',
@@ -19,6 +21,7 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
   const [campaigns, setCampaigns] = useState<{ campaigns: any[]; executions: any[] }>({ campaigns: [], executions: [] });
   const [occurrences, setOccurrences] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
+  const [products, setProducts] = useState<CachedProduct[]>([]);
   const [photo, setPhoto] = useState<File | null>(null);
 
   const [showNewCamp, setShowNewCamp] = useState(false);
@@ -34,20 +37,23 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
 
   const [occForm, setOccForm] = useState({
     store_id: '',
+    product_id: '',
     type: mode === 'rupturas' ? 'Ruptura' : 'Espaço Vazio',
     priority: 'Alta',
     description: '',
   });
 
   const load = async () => {
-    const [c, o, s] = await Promise.all([
+    const [c, o, s, p] = await Promise.all([
       apiFetch('/campaigns'),
       apiFetch(mode === 'rupturas' ? '/occurrences?type=Ruptura' : '/occurrences'),
       apiFetch('/stores'),
+      loadProductsWithDeviceCache(false),
     ]);
     setCampaigns(c);
     setOccurrences(o);
     setStores(s);
+    setProducts(p);
     if (s.length) {
       setOccForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
       setExecForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
@@ -87,11 +93,13 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
   const createOccurrence = async (e: React.FormEvent) => {
     e.preventDefault();
     const fd = new FormData();
-    Object.entries(occForm).forEach(([k, v]) => fd.append(k, String(v)));
+    Object.entries(occForm).forEach(([k, v]) => {
+      if (v !== '' && v !== null && v !== undefined) fd.append(k, String(v));
+    });
     if (photo) fd.append('photo', photo);
     await apiFetch('/occurrences', { method: 'POST', body: fd });
     setPhoto(null);
-    setOccForm((f) => ({ ...f, description: '' }));
+    setOccForm((f) => ({ ...f, product_id: '', description: '' }));
     load();
   };
 
@@ -190,6 +198,14 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
             {['Alta', 'Média', 'Baixa'].map((p) => <option key={p}>{p}</option>)}
           </select>
         </div>
+        <ProductSelectorWithSi5
+          products={products}
+          value={occForm.product_id}
+          onChange={(pid) => setOccForm({ ...occForm, product_id: pid })}
+          onCatalogUpdated={setProducts}
+          allowEmpty
+          emptyLabel={mode === 'rupturas' ? 'Selecione o produto em ruptura (ou pesquise/leia EAN)' : 'Produto relacionado (Opcional)'}
+        />
         <textarea required placeholder="Descreva o problema ou oportunidade identificada no PDV..." value={occForm.description} onChange={(e) => setOccForm({ ...occForm, description: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" rows={2} />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <PhotoInput label="Foto da Ocorrência" onFileSelect={setPhoto} />
@@ -201,11 +217,16 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
         {occurrences.map((o) => (
           <div key={o.id} className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
                   o.priority === 'Alta' ? 'bg-red-100 text-red-700' : o.priority === 'Média' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'
                 }`}>{o.priority}</span>
                 <span className="font-bold text-slate-900 text-sm">{o.type} — {o.store_name}</span>
+                {o.product_name && (
+                  <span className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[11px] font-bold">
+                    Item: {o.product_name}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-600">{o.description}</p>
               <div className="text-[11px] text-slate-400">{o.created_at} • Status: <b>{o.status}</b></div>
