@@ -20,6 +20,7 @@ async function si5Request(path) {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MerchandisingPro/1.0',
     },
   });
 

@@ -10,6 +10,59 @@ interface PhotoInputProps {
   large?: boolean;
 }
 
+/**
+ * Redimensiona e comprime a foto no navegador (máx 1280px, JPEG 80%)
+ * para envio rápido no 4G e economia de espaço na fila offline.
+ */
+async function compressImageFile(file: File, maxSize = 1280, quality = 0.8): Promise<{ compressed: File; previewUrl: string }> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxSize || height > maxSize) {
+          if (width >= height) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          } else {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({ compressed: file, previewUrl: dataUrl });
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedUrl = canvas.toDataURL('image/jpeg', quality);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve({ compressed: file, previewUrl: dataUrl });
+              return;
+            }
+            const baseName = (file.name || 'foto').replace(/\.[^.]+$/, '');
+            const compressedFile = new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' });
+            resolve({ compressed: compressedFile, previewUrl: compressedUrl });
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.onerror = () => resolve({ compressed: file, previewUrl: dataUrl });
+      img.src = dataUrl;
+    };
+    reader.onerror = () => resolve({ compressed: file, previewUrl: '' });
+    reader.readAsDataURL(file);
+  });
+}
+
 export const PhotoInput: React.FC<PhotoInputProps> = ({
   label = 'Capturar / Anexar Foto',
   onFileSelect,
@@ -27,18 +80,18 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
     }
   }, [file]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0] || null;
-    onFileSelect(selected);
-    if (selected) {
-      setCapturedAt(new Date().toLocaleString('pt-BR'));
-      const reader = new FileReader();
-      reader.onload = () => setPreview(reader.result as string);
-      reader.readAsDataURL(selected);
-    } else {
+    if (!selected) {
+      onFileSelect(null);
       setPreview(null);
       setCapturedAt(null);
+      return;
     }
+    const { compressed, previewUrl } = await compressImageFile(selected);
+    setCapturedAt(new Date().toLocaleString('pt-BR'));
+    setPreview(previewUrl || null);
+    onFileSelect(compressed);
   };
 
   const clearSelection = () => {

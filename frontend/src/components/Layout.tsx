@@ -207,11 +207,11 @@ export const Layout: React.FC<LayoutProps> = ({ activePage, onNavigate, children
       {/* Mobile Bottom Quick Bar */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 bg-white border-t border-slate-200 grid grid-cols-5 py-1.5 text-[10px] font-medium text-slate-600">
         {[
-          { id: 'dashboard' as MenuId, label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'dashboard' as MenuId, label: 'Início', icon: LayoutDashboard },
+          { id: 'lojas' as MenuId, label: 'Lojas', icon: Store },
           { id: 'visitas' as MenuId, label: 'Visitas', icon: ClipboardCheck },
           { id: 'abastecimento' as MenuId, label: 'Abastec.', icon: PackagePlus },
           { id: 'rupturas' as MenuId, label: 'Rupturas', icon: AlertTriangle },
-          { id: 'ia' as MenuId, label: 'IA Gôndola', icon: Bot },
         ].map((b) => {
           const Icon = b.icon;
           const active = activePage === b.id;

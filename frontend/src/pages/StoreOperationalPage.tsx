@@ -652,13 +652,13 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
         )}
       </div>
 
-      {/* Feedback Banner */}
+      {/* Toast Flutuante de Feedback (sempre visível no mobile/desktop) */}
       {feedback && (
         <div
-          className={`p-3.5 rounded-2xl text-sm font-semibold flex items-center gap-2 border ${
+          className={`fixed bottom-20 inset-x-4 sm:inset-x-auto sm:right-6 sm:bottom-6 z-50 max-w-md p-3.5 rounded-2xl text-sm font-semibold flex items-center gap-2 border shadow-xl ${
             feedback.type === 'ok'
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-              : 'bg-red-50 text-red-800 border-red-200'
+              ? 'bg-emerald-600 text-white border-emerald-700'
+              : 'bg-red-600 text-white border-red-700'
           }`}
         >
           {feedback.type === 'ok' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
@@ -1034,42 +1034,42 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     </button>
                   </div>
                   {complementaryItems.map((item, idx) => (
-                    <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-white p-2.5 rounded-xl border">
-                      <select
-                        value={item.type}
-                        onChange={(e) => {
-                          const copy = [...complementaryItems];
-                          copy[idx].type = e.target.value;
-                          setComplementaryItems(copy);
-                        }}
-                        className="px-2 py-1.5 border rounded-lg text-xs"
-                      >
-                        {['Ruptura', 'Produto Vencido', 'Próximo do Vencimento', 'Falta de Preço', 'Divergência de Preço'].map((t) => (
-                          <option key={t}>{t}</option>
-                        ))}
-                      </select>
-                      <select
+                    <div key={idx} className="space-y-2 bg-white p-3 rounded-xl border">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <select
+                          value={item.type}
+                          onChange={(e) => {
+                            const copy = [...complementaryItems];
+                            copy[idx].type = e.target.value;
+                            setComplementaryItems(copy);
+                          }}
+                          className="px-2.5 py-2 border rounded-xl text-xs"
+                        >
+                          {['Ruptura', 'Produto Vencido', 'Próximo do Vencimento', 'Falta de Preço', 'Divergência de Preço'].map((t) => (
+                            <option key={t}>{t}</option>
+                          ))}
+                        </select>
+                        <input
+                          placeholder="Detalhes do problema..."
+                          value={item.description}
+                          onChange={(e) => {
+                            const copy = [...complementaryItems];
+                            copy[idx].description = e.target.value;
+                            setComplementaryItems(copy);
+                          }}
+                          className="px-2.5 py-2 border rounded-xl text-xs"
+                        />
+                      </div>
+                      <ProductSelectorWithSi5
+                        products={products}
                         value={item.product_id}
-                        onChange={(e) => {
+                        onChange={(pid) => {
                           const copy = [...complementaryItems];
-                          copy[idx].product_id = e.target.value;
+                          copy[idx].product_id = pid;
                           setComplementaryItems(copy);
                         }}
-                        className="px-2 py-1.5 border rounded-lg text-xs"
-                      >
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        placeholder="Detalhes..."
-                        value={item.description}
-                        onChange={(e) => {
-                          const copy = [...complementaryItems];
-                          copy[idx].description = e.target.value;
-                          setComplementaryItems(copy);
-                        }}
-                        className="px-2 py-1.5 border rounded-lg text-xs sm:col-span-2"
+                        onCatalogUpdated={setProducts}
+                        onNotify={notify}
                       />
                     </div>
                   ))}
@@ -1451,6 +1451,32 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                       + Adicionar
                     </button>
                   </form>
+                </div>
+              )}
+
+              {/* Resumo Rápido do que já foi registrado nesta visita */}
+              {((workflow?.summary?.replenishments?.length || 0) > 0 ||
+                (workflow?.summary?.expiries?.length || 0) > 0 ||
+                (workflow?.summary?.unresolved_pendencies?.length || 0) > 0) && (
+                <div className="pt-3 border-t border-slate-100 space-y-2 text-xs">
+                  <div className="font-bold text-slate-700">Já registrado nesta visita:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {(workflow?.summary?.replenishments || []).map((r: any) => (
+                      <span key={`rep-${r.id}`} className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 font-medium">
+                        Abast.: {r.product_name} ({r.quantity_replenished} un)
+                      </span>
+                    ))}
+                    {(workflow?.summary?.expiries || []).map((e: any) => (
+                      <span key={`exp-${e.id}`} className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-800 font-medium">
+                        Validade: {e.product_name} ({e.condition})
+                      </span>
+                    ))}
+                    {(workflow?.summary?.unresolved_pendencies || []).map((o: any) => (
+                      <span key={`occ-${o.id}`} className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 font-medium">
+                        {o.type}: {o.description}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
