@@ -1,13 +1,40 @@
+export interface OfflineFormFile {
+  field: string;
+  name: string;
+  type: string;
+  dataUrl: string;
+}
+
 export interface OfflineQueueItem {
   id: string;
   url: string;
   method: string;
   body: string | null;
+  formFields?: Array<{ key: string; value: string }>;
+  formFiles?: OfflineFormFile[];
   createdAt: string;
 }
 
 const QUEUE_KEY = 'merchpro_offline_queue';
 const CACHE_PREFIX = 'merchpro_cache_';
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataUrlToBlob(dataUrl: string, mimeType: string): Blob {
+  const parts = dataUrl.split(',');
+  const bstr = atob(parts[1] || '');
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new Blob([u8arr], { type: mimeType || 'image/jpeg' });
+}
 
 export function getOfflineQueue(): OfflineQueueItem[] {
   try {
@@ -32,13 +59,26 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
 
   for (const item of queue) {
     try {
+      let fetchBody: BodyInit | null = item.body;
+      const headers: Record<string, string> = {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      if (item.formFields || item.formFiles) {
+        const fd = new FormData();
+        for (const f of item.formFields || []) fd.append(f.key, f.value);
+        for (const file of item.formFiles || []) {
+          fd.append(file.field, dataUrlToBlob(file.dataUrl, file.type), file.name);
+        }
+        fetchBody = fd;
+      } else {
+        headers['Content-Type'] = 'application/json';
+      }
+
       const res = await fetch(item.url, {
         method: item.method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: item.body,
+        headers,
+        body: fetchBody,
       });
       if (res.ok) synced++;
       else remaining.push(item);
@@ -87,16 +127,38 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
       const cached = localStorage.getItem(`${CACHE_PREFIX}${url}`);
       if (cached) return JSON.parse(cached) as T;
     }
-    // Offline queue for JSON mutations
-    if (!navigator.onLine && !isFormData && options.method && options.method !== 'GET') {
+    // Offline queue for JSON mutations & FormData (photos/evidences)
+    if (!navigator.onLine && options.method && options.method !== 'GET') {
       const queue = getOfflineQueue();
-      queue.push({
-        id: `${Date.now()}-${Math.random()}`,
-        url,
-        method: options.method,
-        body: typeof options.body === 'string' ? options.body : null,
-        createdAt: new Date().toISOString(),
-      });
+      if (isFormData && options.body instanceof FormData) {
+        const formFields: Array<{ key: string; value: string }> = [];
+        const formFiles: OfflineFormFile[] = [];
+        for (const [k, v] of options.body.entries()) {
+          if (v instanceof File) {
+            const dataUrl = await fileToDataUrl(v);
+            formFiles.push({ field: k, name: v.name || 'photo.jpg', type: v.type || 'image/jpeg', dataUrl });
+          } else {
+            formFields.push({ key: k, value: String(v) });
+          }
+        }
+        queue.push({
+          id: `${Date.now()}-${Math.random()}`,
+          url,
+          method: options.method,
+          body: null,
+          formFields,
+          formFiles,
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        queue.push({
+          id: `${Date.now()}-${Math.random()}`,
+          url,
+          method: options.method,
+          body: typeof options.body === 'string' ? options.body : null,
+          createdAt: new Date().toISOString(),
+        });
+      }
       setOfflineQueue(queue);
       return { offlineQueued: true } as T;
     }

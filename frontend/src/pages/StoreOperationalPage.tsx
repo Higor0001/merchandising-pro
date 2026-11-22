@@ -173,6 +173,9 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
   // UI view override to navigate back to earlier unlocked steps
   const [viewStage, setViewStage] = useState<string | null>(null);
+  const [showAbandonModal, setShowAbandonModal] = useState(false);
+  const [abandonReason, setAbandonReason] = useState('Loja Fechada');
+  const [abandonNotes, setAbandonNotes] = useState('');
 
   const notify = (type: 'ok' | 'err', msg: string) => {
     setFeedback({ type, msg });
@@ -517,6 +520,24 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     }
   };
 
+  const handleAbandonVisit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!workflow?.visit) return;
+    try {
+      const reasonText = abandonNotes.trim() ? `${abandonReason} — ${abandonNotes.trim()}` : abandonReason;
+      await apiFetch(`/visits/${workflow.visit.id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reasonText }),
+      });
+      setShowAbandonModal(false);
+      setAbandonNotes('');
+      notify('ok', 'Justificativa de não atendimento registrada.');
+      await loadOperational();
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao registrar justificativa.');
+    }
+  };
+
   if (loading) return <div className="p-8 text-center text-slate-500">Carregando operação da loja...</div>;
   if (!storeData) return null;
 
@@ -571,7 +592,15 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
             </div>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {activeVisit?.status === 'Em Andamento' && (
+              <button
+                onClick={() => setShowAbandonModal(true)}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"
+              >
+                Justificar Não Atendimento
+              </button>
+            )}
             <button
               onClick={() => setTab('operacao')}
               className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
@@ -1732,6 +1761,38 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
         </div>
       )}
 
+      {showAbandonModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleAbandonVisit} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+            <h3 className="font-extrabold text-base text-slate-900">Justificativa de Não Atendimento</h3>
+            <p className="text-xs text-slate-500">Informe o motivo pelo qual não foi possível concluir a visita na loja {store.name}.</p>
+            <select
+              value={abandonReason}
+              onChange={(e) => setAbandonReason(e.target.value)}
+              className="w-full px-3 py-2.5 border rounded-xl text-sm"
+            >
+              {['Loja Fechada', 'Gerente Ausente / Sem Autorização', 'Reforma / Sem Acesso', 'Falta de Energia / Sistema', 'Outro'].map((r) => (
+                <option key={r}>{r}</option>
+              ))}
+            </select>
+            <textarea
+              rows={2}
+              placeholder="Detalhes adicionais (opcional)..."
+              value={abandonNotes}
+              onChange={(e) => setAbandonNotes(e.target.value)}
+              className="w-full px-3 py-2 border rounded-xl text-sm"
+            />
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => setShowAbandonModal(false)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-bold">
+                Voltar
+              </button>
+              <button type="submit" className="px-4 py-2 rounded-xl bg-red-600 text-white text-xs font-bold">
+                Confirmar Justificativa
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
