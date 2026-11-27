@@ -759,7 +759,10 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
 
     const tgRes = await sendPhotoToTelegram({
       filePath: fileForTelegram,
-      reason: `Evidência ${stage} — ${area}${isPanoramic ? ' (Panorâmica)' : ''} (Visita #${vid})`,
+      stage,
+      area,
+      visitId: vid,
+      isPanoramic,
       storeName: store?.name,
       promoterName: req.user?.name,
       details: caption,

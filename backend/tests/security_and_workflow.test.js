@@ -13,7 +13,7 @@ const { authorize } = require('../src/middleware/auth');
 const { imageFileFilter } = require('../src/middleware/upload');
 const { buildHeuristicFallback, extractJsonObject, normalizeVisionPayload } = require('../src/services/aiService');
 const { applyAuditWatermark, detectPanoramic, normalizeAnnotations, renderAnnotatedImage } = require('../src/services/imageAnnotator');
-const { deleteTelegramMessage } = require('../src/services/telegramService');
+const { buildTelegramPhotoCaption, deleteTelegramMessage } = require('../src/services/telegramService');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -197,4 +197,32 @@ test('imageAnnotator normaliza box_2d e gera imagem HD demarcada válida', async
 test('telegramService.deleteTelegramMessage trata ausência de configuração/messageId com segurança', async () => {
   const res = await deleteTelegramMessage({ messageId: null });
   assert.equal(res.deleted, false);
+});
+
+test('telegramService.buildTelegramPhotoCaption gera legenda padronizada e organizada dentro do limite do Telegram', () => {
+  const caption = buildTelegramPhotoCaption({
+    stage: 'FINAL',
+    area: 'Corredor Principal',
+    visitId: 42,
+    isPanoramic: true,
+    storeName: 'CASAGRANDE - GUANDU',
+    promoterName: 'Higor Silva',
+    details: 'Gôndola abastecida e precificada.',
+    capturedAt: '2026-11-27T12:30:00Z',
+  });
+  assert.match(caption, /MERCHANDISING PRO • EVIDÊNCIA HD/);
+  assert.match(caption, /🏪 Loja: CASAGRANDE - GUANDU/);
+  assert.match(caption, /📍 Etapa: FOTO FINAL \(DEPOIS\)/);
+  assert.match(caption, /🗂️ Área: Corredor Principal \[PANORÂMICA\]/);
+  assert.match(caption, /🧾 Visita: #42/);
+  assert.match(caption, /👤 Promotor: Higor Silva/);
+  assert.match(caption, /📝 Detalhes: Gôndola abastecida e precificada\./);
+  assert.ok(caption.length <= 1020);
+});
+
+test('Catálogo PepsiCo tem todos os nomes de produtos padronizados em CAIXA ALTA', () => {
+  const catalog = require('../src/db/pepsico_catalog_si5.json');
+  assert.ok(Array.isArray(catalog) && catalog.length > 0);
+  const nonUpper = catalog.filter((item) => item.name !== String(item.name || '').toLocaleUpperCase('pt-BR'));
+  assert.equal(nonUpper.length, 0);
 });

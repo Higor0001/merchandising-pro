@@ -82,12 +82,13 @@ router.post('/products', authorize('admin', 'supervisor'), async (req, res, next
     if (await productsCol.findOne({ $or: [{ sku }, { ean, active: { $ne: 0 } }] })) {
       return res.status(400).json({ error: 'Já existe um produto ativo cadastrado com este SKU ou EAN.' });
     }
+    const normalizedName = String(name).trim().replace(/\s+/g, ' ').toLocaleUpperCase('pt-BR');
     const id = await nextId('products');
     const doc = {
       id,
       sku,
       ean,
-      name,
+      name: normalizedName,
       brand_id: brand_id ? Number(brand_id) : null,
       category,
       unit: unit || 'UN',
@@ -99,7 +100,7 @@ router.post('/products', authorize('admin', 'supervisor'), async (req, res, next
       created_at: nowStr(),
     };
     await productsCol.insertOne(doc);
-    await logAudit(req.user, 'CREATE', 'products', id, `Produto ${name} (${sku}) cadastrado`);
+    await logAudit(req.user, 'CREATE', 'products', id, `Produto ${normalizedName} (${sku}) cadastrado`);
     res.status(201).json(doc);
   } catch (err) { next(err); }
 });
@@ -326,7 +327,10 @@ router.post(
       if (tgBeforePath) {
         await sendPhotoToTelegram({
           filePath: tgBeforePath,
-          reason: `Exposição (${exposure_type}) — Foto ANTES`,
+          stage: 'EXPOSICAO_ANTES',
+          area: exposure_type,
+          visitId: visit_id ? Number(visit_id) : null,
+          reason: `Categoria ${category}`,
           storeName: store?.name,
           promoterName: req.user?.name,
           details,
@@ -335,7 +339,10 @@ router.post(
       if (tgAfterPath) {
         await sendPhotoToTelegram({
           filePath: tgAfterPath,
-          reason: `Exposição (${exposure_type}) — Foto DEPOIS`,
+          stage: 'EXPOSICAO_DEPOIS',
+          area: exposure_type,
+          visitId: visit_id ? Number(visit_id) : null,
+          reason: `Categoria ${category}`,
           storeName: store?.name,
           promoterName: req.user?.name,
           details,
@@ -591,12 +598,13 @@ router.post('/si5/import', async (req, res, next) => {
       return res.status(400).json({ error: 'Já existe um produto cadastrado com este EAN.' });
     }
 
+    const normalizedProductName = String(produto).trim().replace(/\s+/g, ' ').toLocaleUpperCase('pt-BR');
     const id = await nextId('products');
     const doc = {
       id,
       sku: `SI5-${String(codbar)}`,
       ean: String(codbar),
-      name: produto,
+      name: normalizedProductName,
       brand_id: brandId,
       category: categoria || 'Geral',
       unit: embalagem || 'UN',
@@ -607,7 +615,7 @@ router.post('/si5/import', async (req, res, next) => {
       created_at: nowStr(),
     };
     await productsCol.insertOne(doc);
-    await logAudit(req.user, 'SI5_IMPORT', 'products', id, `Produto ${produto} (${codbar}) importado via SI5 Global`);
+    await logAudit(req.user, 'SI5_IMPORT', 'products', id, `Produto ${normalizedProductName} (${codbar}) importado via SI5 Global`);
     res.status(201).json(doc);
   } catch (err) { next(err); }
 });

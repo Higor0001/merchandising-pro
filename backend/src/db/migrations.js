@@ -29,6 +29,7 @@ async function runIncrementalMigrations() {
             'migration_dedup_pepsico_v3',
             'migration_clear_history_site_only_v1',
             'migration_clean_pack_names_v4',
+            'migration_uppercase_products_v5',
           ],
         },
       })
@@ -488,6 +489,47 @@ async function runIncrementalMigrations() {
           { upsert: true }
         );
       }
+    }
+
+    // 8. Padronização de todos os nomes de produtos em CAIXA ALTA (bulkWrite < 0.3s)
+    const alreadyUpperV5 = doneSet.has('migration_uppercase_products_v5');
+    if (!alreadyUpperV5) {
+      const productsCol = await col('products');
+      const migratedAt = nowStr();
+      const allProducts = await productsCol
+        .find({}, { projection: { _id: 0, id: 1, name: 1 } })
+        .toArray();
+
+      const bulkOps = [];
+      for (const prod of allProducts) {
+        const cleanUpper = String(prod.name || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .toLocaleUpperCase('pt-BR');
+        if (cleanUpper && cleanUpper !== prod.name) {
+          bulkOps.push({
+            updateOne: {
+              filter: { id: prod.id },
+              update: {
+                $set: {
+                  name: cleanUpper,
+                  updated_at: migratedAt,
+                },
+              },
+            },
+          });
+        }
+      }
+
+      if (bulkOps.length > 0) {
+        await productsCol.bulkWrite(bulkOps, { ordered: false });
+      }
+
+      await countersCol.updateOne(
+        { _id: 'migration_uppercase_products_v5' },
+        { $set: { seq: bulkOps.length, migrated_at: migratedAt } },
+        { upsert: true }
+      );
     }
   })().catch((err) => {
     migrationPromise = null;

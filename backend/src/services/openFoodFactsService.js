@@ -81,7 +81,10 @@ async function pullPepsicoFromOpenFoodFacts() {
 
     for (const raw of items) {
       const ean = String(raw?.code || '').trim();
-      const name = String(raw?.product_name_pt || raw?.product_name || '').trim();
+      const name = String(raw?.product_name_pt || raw?.product_name || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLocaleUpperCase('pt-BR');
       if (!ean || !name || seenEans.has(ean)) continue;
       seenEans.add(ean);
 

@@ -66,7 +66,10 @@ async function upsertSi5ItemsToCatalog(items = []) {
 
   for (const raw of items) {
     const ean = String(raw?.codbar || raw?.gtin || raw?.ean || '').trim();
-    const name = String(raw?.produto || raw?.nome || raw?.descricao || '').trim();
+    const name = String(raw?.produto || raw?.nome || raw?.descricao || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLocaleUpperCase('pt-BR');
     if (!ean || !name) continue;
 
     let brandId = null;

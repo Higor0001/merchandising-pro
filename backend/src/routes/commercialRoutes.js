@@ -163,10 +163,13 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
     if (tgPath) {
       await sendPhotoToTelegram({
         filePath: tgPath,
-        reason: 'Precificação / Conferência de Etiqueta',
+        stage: 'PRECIFICACAO',
+        area: 'Gôndola / Etiqueta',
+        visitId: visit_id ? Number(visit_id) : null,
+        reason: product?.name || `Produto #${product_id}`,
         storeName: store?.name,
         promoterName: req.user?.name,
-        details: `Produto: ${product?.name || product_id} | Preço Gôndola: ${gPrice !== null ? `R$ ${gPrice.toFixed(2)}` : 'Sem etiqueta'}${notes ? ` | Obs: ${notes}` : ''}`,
+        details: `Preço Gôndola: ${gPrice !== null ? `R$ ${gPrice.toFixed(2)}` : 'Sem etiqueta'}${notes ? ` | Obs: ${notes}` : ''}`,
       });
     }
 
@@ -180,26 +183,47 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
 });
 
 // --- EXPIRY & QUALITY ---
-router.get('/expiries', async (_req, res, next) => {
+router.get('/expiries', async (req, res, next) => {
   try {
-    const [rows, stores, products, users] = await Promise.all([
-      (await col('expiry_checks')).find({}, { projection: { _id: 0 } }).sort({ expiry_date: 1 }).limit(120).toArray(),
-      (await col('stores')).find({}).toArray(),
-      (await col('products')).find({}).toArray(),
+    const { store_id, condition, only_removed } = req.query;
+    const filter = {};
+    if (store_id) filter.store_id = Number(store_id);
+    if (condition) filter.condition = String(condition);
+    if (only_removed === '1' || only_removed === 'true') {
+      filter.$or = [{ removal_requested: 1 }, { condition: 'Vencido' }];
+    }
+
+    const [rows, stores, products, brands, users] = await Promise.all([
+      (await col('expiry_checks')).find(filter, { projection: { _id: 0 } }).sort({ expiry_date: 1, id: -1 }).limit(500).toArray(),
+      (await col('stores')).find({}, { projection: { _id: 0, id: 1, name: 1, address: 1, city: 1 } }).toArray(),
+      (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1, sku: 1, ean: 1, weight: 1, brand_id: 1 } }).toArray(),
+      (await col('brands')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
       (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
-    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
+    const storeMap = Object.fromEntries(stores.map((s) => [s.id, s]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
+    const brandMap = Object.fromEntries(brands.map((b) => [b.id, b.name]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
 
     res.json(
-      rows.map((ec) => ({
-        ...ec,
-        store_name: storeMap[ec.store_id] || '-',
-        product_name: prodMap[ec.product_id]?.name || '-',
-        sku: prodMap[ec.product_id]?.sku || '',
-        promoter_name: userMap[ec.promoter_id] || '',
-      }))
+      rows.map((ec) => {
+        const s = storeMap[ec.store_id] || {};
+        const p = prodMap[ec.product_id] || {};
+        const isRemoved = Boolean(ec.condition === 'Vencido' || ec.removal_requested === 1 || ec.removal_requested === true);
+        return {
+          ...ec,
+          store_name: s.name || '-',
+          store_address: s.address || '',
+          store_city: s.city || '',
+          product_name: p.name || '-',
+          product_weight: p.weight || '',
+          product_ean: p.ean || '',
+          sku: p.sku || '',
+          brand_name: brandMap[p.brand_id] || '',
+          promoter_name: userMap[ec.promoter_id] || '',
+          is_removed: isRemoved,
+        };
+      })
     );
   } catch (err) { next(err); }
 });
@@ -427,7 +451,10 @@ router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecut
     if (tgPath) {
       await sendPhotoToTelegram({
         filePath: tgPath,
-        reason: `Comprovação de Campanha (${camp?.title || `#${cid}`})`,
+        stage: 'CAMPANHA',
+        area: 'Material / Ação Promocional',
+        visitId: visit_id ? Number(visit_id) : null,
+        reason: camp?.title || `Campanha #${cid}`,
         storeName: store?.name,
         promoterName: req.user?.name,
         details: notes || 'Campanha implantada no PDV',
@@ -526,7 +553,10 @@ router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegri
     if (tgPath) {
       await sendPhotoToTelegram({
         filePath: tgPath,
-        reason: `Ocorrência: ${type} (Prioridade ${priority || 'Média'})`,
+        stage: 'OCORRENCIA',
+        area: type,
+        visitId: visit_id ? Number(visit_id) : null,
+        reason: `Prioridade ${priority || 'Média'}`,
         storeName: store?.name,
         promoterName: req.user?.name,
         details: description,
@@ -762,13 +792,16 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
         });
       }
 
-      const panoTag = existing.is_panoramic ? ' [Panorâmica]' : '';
       const r1 = await sendPhotoToTelegram({
         filePath: tempOrigPath,
-        reason: `Análise IA Validada 100%${panoTag} — Foto ORIGINAL (Score: ${existing.planogram_score}%)`,
+        stage: 'IA_ORIGINAL',
+        area: existing.area || 'Gôndola Principal',
+        visitId: existing.visit_id || null,
+        isPanoramic: Boolean(existing.is_panoramic),
+        reason: `Score Planograma ${existing.planogram_score}% • Validada 100%`,
         storeName: store?.name,
         promoterName: req.user?.name,
-        details: `${existing.area ? `[${existing.area}] ` : ''}${existing.auto_report}${human_notes ? ` | Nota: ${human_notes}` : ''}`,
+        details: `${existing.auto_report || ''}${human_notes ? ` | Nota: ${human_notes}` : ''}`.trim(),
       });
       let r2 = { sent: false };
       if (tempAnnotPath) {
@@ -777,10 +810,14 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
           : 'Área geral de gôndola destacada';
         r2 = await sendPhotoToTelegram({
           filePath: tempAnnotPath,
-          reason: `Análise IA Validada 100%${panoTag} — Foto DEMARCADA (${finalAnnotations.length} área(s))`,
+          stage: 'IA_DEMARCADA',
+          area: existing.area || 'Gôndola Principal',
+          visitId: existing.visit_id || null,
+          isPanoramic: Boolean(existing.is_panoramic),
+          reason: `${finalAnnotations.length} área(s) demarcada(s) • Validada 100%`,
           storeName: store?.name,
           promoterName: req.user?.name,
-          details: `${existing.area ? `[${existing.area}] ` : ''}Marcações validadas: ${legend}`,
+          details: `Marcações validadas: ${legend}`,
         });
       }
       telegramResults = { original: r1, annotated: r2 };
@@ -1030,7 +1067,17 @@ router.get('/reports/:type', authorize('admin', 'supervisor'), async (req, res, 
       }
       case 'validade': {
         const rows = (await (await col('expiry_checks')).find({}).toArray()).filter((e) => inPeriod(e.created_at || e.expiry_date));
-        return res.json(rows.map((e) => ({ Validade: e.expiry_date, Loja: storeMap[e.store_id], Produto: prodMap[e.product_id], Lote: e.batch_code, Qtd: e.quantity, Condição: e.condition, Perda_Estimada: e.estimated_loss })));
+        return res.json(rows.map((e) => ({
+          Validade: e.expiry_date,
+          Loja: storeMap[e.store_id],
+          Produto: prodMap[e.product_id],
+          Lote: e.batch_code || '-',
+          Qtd: e.quantity,
+          Condição: e.condition,
+          Retirado: e.condition === 'Vencido' || e.removal_requested ? 'Sim' : 'Não',
+          Qtd_Retirada: e.condition === 'Vencido' || e.removal_requested ? e.quantity : 0,
+          Perda_Estimada: e.estimated_loss,
+        })));
       }
       case 'precificacao':
       case 'concorrencia': {

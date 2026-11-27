@@ -660,3 +660,383 @@ export function exportVisitHistoryExcel(report: VisitReportPayload): boolean {
   XLSX.writeFile(wb, `historico_visita_${visit.id}_${fileSlug}.xlsx`);
   return true;
 }
+
+export interface ExpiryReportRow {
+  id: number;
+  store_id?: number;
+  store_name?: string;
+  product_id?: number;
+  product_name?: string;
+  product_weight?: string;
+  product_ean?: string;
+  brand_name?: string;
+  batch_code?: string;
+  expiry_date?: string;
+  quantity?: number;
+  fifo_fefo_applied?: number | boolean;
+  condition?: string;
+  removal_requested?: number | boolean;
+  is_removed?: boolean;
+  estimated_loss?: number;
+  promoter_name?: string;
+  notes?: string;
+  created_at?: string;
+}
+
+export function isExpiryItemRemoved(row: ExpiryReportRow): boolean {
+  return Boolean(
+    row?.is_removed ||
+      row?.removal_requested === 1 ||
+      row?.removal_requested === true ||
+      row?.condition === 'Vencido'
+  );
+}
+
+function formatBrDate(dateStr?: string): string {
+  const s = String(dateStr || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return s || '-';
+}
+
+/**
+ * Gera e baixa o relatório em PDF de Controle de Validades por Loja,
+ * incluindo seção destacada de Produtos Retirados com suas quantidades e totais por loja.
+ */
+export function exportExpiriesPDF(params: {
+  rows: ExpiryReportRow[];
+  storeLabel?: string;
+  filterLabel?: string;
+}): boolean {
+  const rows = Array.isArray(params?.rows) ? params.rows : [];
+  if (rows.length === 0) return false;
+
+  const storeLabel = params.storeLabel || 'Todas as Lojas';
+  const filterLabel = params.filterLabel || 'Todas as Condições';
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  let y = 12;
+
+  const ensureSpace = (needed: number) => {
+    if (y + needed > pageH - 14) {
+      doc.addPage();
+      y = 14;
+    }
+  };
+
+  // Cabeçalho corporativo
+  doc.setFillColor(15, 23, 42);
+  doc.roundedRect(margin, y, pageW - margin * 2, 24, 3, 3, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text('MERCHANDISING PRO — Controle de Validades & Retirados', margin + 5, y + 9);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Loja: ${storeLabel}  •  Filtro: ${filterLabel}`, margin + 5, y + 15.5);
+  doc.setFontSize(8);
+  doc.setTextColor(203, 213, 225);
+  doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}  •  Total de registros: ${rows.length}`, margin + 5, y + 21);
+  y += 29;
+
+  // Métricas consolidadas
+  const removedRows = rows.filter(isExpiryItemRemoved);
+  const totalCheckedQty = rows.reduce((acc, r) => acc + Number(r.quantity || 0), 0);
+  const totalRemovedQty = removedRows.reduce((acc, r) => acc + Number(r.quantity || 0), 0);
+  const totalLoss = rows.reduce((acc, r) => acc + Number(r.estimated_loss || 0), 0);
+  const removedLoss = removedRows.reduce((acc, r) => acc + Number(r.estimated_loss || 0), 0);
+  const nearExpiryCount = rows.filter((r) => r.condition === 'Próximo Vencimento').length;
+  const expiredCount = rows.filter((r) => r.condition === 'Vencido').length;
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(10.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text('1. Resumo Geral', margin, y);
+  y += 3;
+
+  autoTable(doc, {
+    startY: y,
+    margin: { left: margin, right: margin },
+    head: [['Indicador', 'Quantidade / Valor', 'Indicador', 'Quantidade / Valor']],
+    body: [
+      ['Registros Conferidos', `${rows.length} item(ns) (${totalCheckedQty} un)`, 'Produtos Retirados', `${removedRows.length} item(ns) (${totalRemovedQty} un)`],
+      ['Vencidos / Próx. Vencimento', `${expiredCount} vencido(s) • ${nearExpiryCount} próx.`, 'Perda Estimada Total', `R$ ${totalLoss.toFixed(2)}`],
+    ],
+    styles: { fontSize: 8.5, cellPadding: 2.2 },
+    headStyles: { fillColor: [29, 78, 216] },
+  });
+  y = ((doc as any).lastAutoTable?.finalY || y + 24) + 7;
+
+  // Agrupamento por loja
+  const byStore = new Map<string, ExpiryReportRow[]>();
+  for (const r of rows) {
+    const sName = String(r.store_name || 'Loja não informada');
+    const list = byStore.get(sName) || [];
+    list.push(r);
+    byStore.set(sName, list);
+  }
+  const sortedStores = Array.from(byStore.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+  // Resumo por loja quando houver mais de 1 loja
+  if (sortedStores.length > 1) {
+    ensureSpace(32);
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(10.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`2. Consolidado por Loja (${sortedStores.length} lojas)`, margin, y);
+    y += 3;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Loja', 'Conferidos', 'Qtd Total', 'Retirados (Itens)', 'Qtd Retirada', 'Perda (R$)']],
+      body: sortedStores.map(([sName, items]) => {
+        const sRemoved = items.filter(isExpiryItemRemoved);
+        const sTotalQty = items.reduce((acc, i) => acc + Number(i.quantity || 0), 0);
+        const sRemQty = sRemoved.reduce((acc, i) => acc + Number(i.quantity || 0), 0);
+        const sLoss = items.reduce((acc, i) => acc + Number(i.estimated_loss || 0), 0);
+        return [sName, String(items.length), `${sTotalQty} un`, String(sRemoved.length), `${sRemQty} un`, `R$ ${sLoss.toFixed(2)}`];
+      }),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [30, 64, 175] },
+      columnStyles: {
+        4: { fontStyle: 'bold', textColor: [185, 28, 28] },
+      },
+    });
+    y = ((doc as any).lastAutoTable?.finalY || y + 28) + 7;
+  }
+
+  // Seção Destacada: Produtos Retirados e Respectivas Quantidades
+  ensureSpace(34);
+  const removedSecNum = sortedStores.length > 1 ? '3' : '2';
+  doc.setFillColor(190, 18, 60);
+  doc.roundedRect(margin, y, pageW - margin * 2, 8, 2, 2, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text(
+    `${removedSecNum}. Produtos Retirados da Área de Vendas (${removedRows.length} registros • ${totalRemovedQty} un)`,
+    margin + 3.5,
+    y + 5.4
+  );
+  y += 10.5;
+
+  if (removedRows.length > 0) {
+    const sortedRemoved = [...removedRows].sort((a, b) => {
+      const storeCmp = String(a.store_name || '').localeCompare(String(b.store_name || ''));
+      if (storeCmp !== 0) return storeCmp;
+      return String(a.expiry_date || '').localeCompare(String(b.expiry_date || ''));
+    });
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Loja', 'Produto', 'Gram.', 'Lote', 'Validade', 'Qtd Retirada', 'Condição', 'Perda (R$)']],
+      body: [
+        ...sortedRemoved.map((r) => [
+          r.store_name || '-',
+          r.product_name || '-',
+          r.product_weight || '-',
+          r.batch_code || '-',
+          formatBrDate(r.expiry_date),
+          `${Number(r.quantity || 0)} un`,
+          r.condition || '-',
+          `R$ ${Number(r.estimated_loss || 0).toFixed(2)}`,
+        ]),
+        [
+          'TOTAL RETIRADO',
+          `${removedRows.length} item(ns)`,
+          '',
+          '',
+          '',
+          `${totalRemovedQty} un`,
+          '',
+          `R$ ${removedLoss.toFixed(2)}`,
+        ],
+      ],
+      styles: { fontSize: 7.5, cellPadding: 1.8 },
+      headStyles: { fillColor: [159, 18, 57] },
+      columnStyles: {
+        5: { fontStyle: 'bold', textColor: [185, 28, 28], halign: 'right' },
+        7: { halign: 'right' },
+      },
+      didParseCell: (hookData) => {
+        if (hookData.section === 'body' && hookData.row.index === sortedRemoved.length) {
+          hookData.cell.styles.fontStyle = 'bold';
+          hookData.cell.styles.fillColor = [254, 226, 226];
+          hookData.cell.styles.textColor = [127, 29, 29];
+        }
+      },
+    });
+    y = ((doc as any).lastAutoTable?.finalY || y + 30) + 8;
+  } else {
+    doc.setTextColor(71, 85, 105);
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Nenhum produto retirado registrado para o filtro selecionado.', margin + 2, y + 3);
+    y += 10;
+  }
+
+  // Tabela Completa de Validades Agrupada por Loja
+  ensureSpace(32);
+  const tableSecNum = sortedStores.length > 1 ? '4' : '3';
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(10.5);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${tableSecNum}. Tabela Detalhada de Validades por Loja`, margin, y);
+  y += 5;
+
+  for (const [sName, items] of sortedStores) {
+    ensureSpace(30);
+    const sTotalQty = items.reduce((acc, i) => acc + Number(i.quantity || 0), 0);
+    const sRemQty = items.filter(isExpiryItemRemoved).reduce((acc, i) => acc + Number(i.quantity || 0), 0);
+
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(margin, y, pageW - margin * 2, 7.5, 1.5, 1.5, 'F');
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${sName}  —  ${items.length} registro(s) • ${sTotalQty} un conferidas • ${sRemQty} un retiradas`, margin + 3, y + 5);
+    y += 9.5;
+
+    const sortedItems = [...items].sort((a, b) => String(a.expiry_date || '').localeCompare(String(b.expiry_date || '')));
+    autoTable(doc, {
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Validade', 'Produto', 'Gram.', 'Lote', 'Qtd', 'Condição', 'Retirado', 'PVPS', 'Perda (R$)']],
+      body: sortedItems.map((r) => {
+        const rem = isExpiryItemRemoved(r);
+        return [
+          formatBrDate(r.expiry_date),
+          r.product_name || '-',
+          r.product_weight || '-',
+          r.batch_code || '-',
+          `${Number(r.quantity || 0)} un`,
+          r.condition || '-',
+          rem ? `Sim (${Number(r.quantity || 0)} un)` : 'Não',
+          r.fifo_fefo_applied ? 'Sim' : 'Não',
+          `R$ ${Number(r.estimated_loss || 0).toFixed(2)}`,
+        ];
+      }),
+      styles: { fontSize: 7.3, cellPadding: 1.7 },
+      headStyles: { fillColor: [51, 65, 85] },
+      columnStyles: {
+        4: { halign: 'right' },
+        6: { fontStyle: 'bold' },
+        8: { halign: 'right' },
+      },
+      didParseCell: (hookData) => {
+        if (hookData.section === 'body' && hookData.column.index === 6) {
+          const val = String(hookData.cell.raw || '');
+          if (val.startsWith('Sim')) {
+            hookData.cell.styles.textColor = [185, 28, 28];
+          } else {
+            hookData.cell.styles.textColor = [100, 116, 139];
+          }
+        }
+      },
+    });
+    y = ((doc as any).lastAutoTable?.finalY || y + 24) + 6;
+  }
+
+  const slug = slugifyFilePart(storeLabel);
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  doc.save(`validades_retirados_${slug}_${dateStamp}.pdf`);
+  return true;
+}
+
+/**
+ * Gera e baixa planilha Excel (tabela) multi-abas com Resumo por Loja,
+ * Produtos Retirados e Tabela Completa de Validades.
+ */
+export function exportExpiriesExcel(params: { rows: ExpiryReportRow[]; storeLabel?: string }): boolean {
+  const rows = Array.isArray(params?.rows) ? params.rows : [];
+  if (rows.length === 0) return false;
+
+  const storeLabel = params.storeLabel || 'todas_as_lojas';
+  const wb = XLSX.utils.book_new();
+  const appendSheet = (name: string, data: Record<string, any>[]) => {
+    const safe = data.length > 0 ? data : [{ Informação: 'Sem registros para o filtro selecionado' }];
+    const ws = XLSX.utils.json_to_sheet(safe);
+    XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+  };
+
+  // Aba 1: Resumo por Loja
+  const byStore = new Map<string, ExpiryReportRow[]>();
+  for (const r of rows) {
+    const sName = String(r.store_name || 'Loja não informada');
+    const list = byStore.get(sName) || [];
+    list.push(r);
+    byStore.set(sName, list);
+  }
+  const summaryRows = Array.from(byStore.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([sName, items]) => {
+      const removed = items.filter(isExpiryItemRemoved);
+      return {
+        Loja: sName,
+        Registros_Conferidos: items.length,
+        Qtd_Total_Conferida: items.reduce((acc, i) => acc + Number(i.quantity || 0), 0),
+        Itens_Retirados: removed.length,
+        Qtd_Total_Retirada: removed.reduce((acc, i) => acc + Number(i.quantity || 0), 0),
+        Vencidos: items.filter((i) => i.condition === 'Vencido').length,
+        Proximo_Vencimento: items.filter((i) => i.condition === 'Próximo Vencimento').length,
+        Avarias_Danificados: items.filter((i) => i.condition === 'Avaria' || i.condition === 'Embalagem Danificada').length,
+        Perda_Estimada_RS: Number(items.reduce((acc, i) => acc + Number(i.estimated_loss || 0), 0).toFixed(2)),
+      };
+    });
+  appendSheet('Resumo_por_Loja', summaryRows);
+
+  // Aba 2: Produtos Retirados
+  const removedRows = rows
+    .filter(isExpiryItemRemoved)
+    .sort((a, b) => String(a.store_name || '').localeCompare(String(b.store_name || '')) || String(a.expiry_date || '').localeCompare(String(b.expiry_date || '')))
+    .map((r) => ({
+      Loja: r.store_name || '-',
+      Validade: formatBrDate(r.expiry_date),
+      Produto: r.product_name || '-',
+      Gramatura: r.product_weight || '-',
+      EAN: r.product_ean || '-',
+      Lote: r.batch_code || '-',
+      Qtd_Retirada: Number(r.quantity || 0),
+      Condicao: r.condition || '-',
+      Perda_Estimada_RS: Number(r.estimated_loss || 0),
+      Promotor: r.promoter_name || '-',
+      Observacoes: r.notes || '',
+      Registrado_Em: r.created_at || '',
+    }));
+  appendSheet('Produtos_Retirados', removedRows);
+
+  // Aba 3: Tabela Completa de Validades por Loja
+  const allRows = [...rows]
+    .sort((a, b) => String(a.store_name || '').localeCompare(String(b.store_name || '')) || String(a.expiry_date || '').localeCompare(String(b.expiry_date || '')))
+    .map((r) => {
+      const rem = isExpiryItemRemoved(r);
+      return {
+        Loja: r.store_name || '-',
+        Validade: formatBrDate(r.expiry_date),
+        Produto: r.product_name || '-',
+        Gramatura: r.product_weight || '-',
+        EAN: r.product_ean || '-',
+        Lote: r.batch_code || '-',
+        Quantidade: Number(r.quantity || 0),
+        Condicao: r.condition || '-',
+        Retirado: rem ? 'Sim' : 'Não',
+        Qtd_Retirada: rem ? Number(r.quantity || 0) : 0,
+        FIFO_FEFO: r.fifo_fefo_applied ? 'Sim' : 'Não',
+        Perda_Estimada_RS: Number(r.estimated_loss || 0),
+        Promotor: r.promoter_name || '-',
+        Observacoes: r.notes || '',
+        Registrado_Em: r.created_at || '',
+      };
+    });
+  appendSheet('Validades_por_Loja', allRows);
+
+  const slug = slugifyFilePart(storeLabel);
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `validades_retirados_${slug}_${dateStamp}.xlsx`);
+  return true;
+}

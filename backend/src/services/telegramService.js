@@ -8,13 +8,102 @@ function detectMimeType(filePath) {
   return 'image/jpeg';
 }
 
+const STAGE_LABELS = {
+  SELFIE_ENTRADA: 'SELFIE NA ENTRADA',
+  INICIAL: 'FOTO INICIAL (ANTES)',
+  COMPLEMENTAR: 'FOTO COMPLEMENTAR',
+  FINAL: 'FOTO FINAL (DEPOIS)',
+  EXPOSICAO_ANTES: 'EXPOSIÇÃO — ANTES',
+  EXPOSICAO_DEPOIS: 'EXPOSIÇÃO — DEPOIS',
+  PRECIFICACAO: 'PRECIFICAÇÃO / ETIQUETA',
+  OCORRENCIA: 'OCORRÊNCIA NO PDV',
+  CAMPANHA: 'COMPROVAÇÃO DE CAMPANHA',
+  IA_ORIGINAL: 'AUDITORIA IA — ORIGINAL',
+  IA_DEMARCADA: 'AUDITORIA IA — DEMARCADA',
+  VISITA: 'REGISTRO DE VISITA',
+};
+
+function formatTelegramTimestamp(dateInput) {
+  const dt = dateInput ? new Date(dateInput) : new Date();
+  const valid = Number.isNaN(dt.getTime()) ? new Date() : dt;
+  return valid.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function buildTelegramPhotoCaption({
+  reason,
+  storeName,
+  promoterName,
+  details,
+  stage,
+  area,
+  visitId,
+  isPanoramic = false,
+  mode = 'hd',
+  capturedAt,
+} = {}) {
+  const clean = (v) => String(v || '').replace(/\s+/g, ' ').trim();
+  const stageKey = clean(stage).toUpperCase();
+  const stageLabel = STAGE_LABELS[stageKey] || (stageKey ? stageKey : '');
+  const cleanStore = clean(storeName);
+  const cleanArea = clean(area);
+  const cleanReason = clean(reason);
+  const cleanPromoter = clean(promoterName);
+  const cleanDetails = clean(details);
+  const headerTag = mode === 'compressed' ? 'EVIDÊNCIA PDV' : 'EVIDÊNCIA HD';
+  const divider = '━━━━━━━━━━━━━━━━━━━━';
+
+  const lines = [
+    `📸 MERCHANDISING PRO • ${headerTag}`,
+    divider,
+    `🏪 Loja: ${cleanStore || 'Não informada'}`,
+    stageLabel ? `📍 Etapa: ${stageLabel}` : null,
+    cleanArea
+      ? `🗂️ Área: ${cleanArea}${isPanoramic ? ' [PANORÂMICA]' : ''}`
+      : isPanoramic
+        ? '🗂️ Formato: PANORÂMICA'
+        : null,
+    cleanReason ? `🎯 Registro: ${cleanReason}` : null,
+    visitId ? `🧾 Visita: #${visitId}` : null,
+    `👤 Promotor: ${cleanPromoter || 'Não informado'}`,
+    `🕒 Data/Hora: ${formatTelegramTimestamp(capturedAt)}`,
+  ].filter(Boolean);
+
+  if (cleanDetails) {
+    lines.push(divider);
+    lines.push(`📝 Detalhes: ${cleanDetails}`);
+  }
+
+  const full = lines.join('\n');
+  if (full.length <= 1020) return full;
+  return `${full.slice(0, 1017)}...`;
+}
+
 /**
  * Envia evidência fotográfica ao Telegram.
  * Por padrão usa `sendDocument` (modo HD sem recomprimir no servidor do Telegram),
  * preservando a resolução HD completa da fotografia.
  * Caso deseje envio comprimido como foto comum, defina TELEGRAM_PHOTO_MODE=compressed.
  */
-async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, details }) {
+async function sendPhotoToTelegram({
+  filePath,
+  reason,
+  storeName,
+  promoterName,
+  details,
+  stage,
+  area,
+  visitId,
+  isPanoramic = false,
+  capturedAt,
+}) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -32,18 +121,18 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
     const endpoint = useCompressedPhoto ? 'sendPhoto' : 'sendDocument';
     const fieldName = useCompressedPhoto ? 'photo' : 'document';
 
-    const lines = [
-      useCompressedPhoto
-        ? '📸 MERCHANDISING PRO — Evidência Fotográfica'
-        : '📸 MERCHANDISING PRO — Evidência Fotográfica (HD)',
-      `📌 Motivo: ${reason || 'Registro no PDV'}`,
-      storeName ? `🏪 Loja: ${storeName}` : null,
-      promoterName ? `👤 Promotor: ${promoterName}` : null,
-      details ? `📝 Descrição: ${details}` : null,
-      `🕒 Data/Hora: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`,
-    ].filter(Boolean);
-
-    const caption = lines.join('\n').slice(0, 1020);
+    const caption = buildTelegramPhotoCaption({
+      reason,
+      storeName,
+      promoterName,
+      details,
+      stage,
+      area,
+      visitId,
+      isPanoramic,
+      mode: useCompressedPhoto ? 'compressed' : 'hd',
+      capturedAt,
+    });
 
     const formData = new FormData();
     formData.append('chat_id', chatId);
@@ -148,4 +237,9 @@ async function sendMessageToTelegram({ text }) {
   }
 }
 
-module.exports = { sendPhotoToTelegram, sendMessageToTelegram, deleteTelegramMessage };
+module.exports = {
+  buildTelegramPhotoCaption,
+  sendPhotoToTelegram,
+  sendMessageToTelegram,
+  deleteTelegramMessage,
+};
