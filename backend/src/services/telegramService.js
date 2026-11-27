@@ -1,6 +1,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+function detectMimeType(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
+
+/**
+ * Envia evidência fotográfica ao Telegram.
+ * Por padrão usa `sendDocument` (modo HD sem recomprimir no servidor do Telegram),
+ * preservando a resolução HD completa da fotografia.
+ * Caso deseje envio comprimido como foto comum, defina TELEGRAM_PHOTO_MODE=compressed.
+ */
 async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, details }) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -10,12 +23,19 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
   }
 
   try {
-    const buffer = fs.readFileSync(filePath);
+    const buffer = await fs.promises.readFile(filePath);
     const filename = path.basename(filePath);
-    const blob = new Blob([buffer], { type: 'image/jpeg' });
+    const mimeType = detectMimeType(filePath);
+    const blob = new Blob([buffer], { type: mimeType });
+
+    const useCompressedPhoto = (process.env.TELEGRAM_PHOTO_MODE || 'hd').trim().toLowerCase() === 'compressed';
+    const endpoint = useCompressedPhoto ? 'sendPhoto' : 'sendDocument';
+    const fieldName = useCompressedPhoto ? 'photo' : 'document';
 
     const lines = [
-      '📸 MERCHANDISING PRO — Evidência Fotográfica',
+      useCompressedPhoto
+        ? '📸 MERCHANDISING PRO — Evidência Fotográfica'
+        : '📸 MERCHANDISING PRO — Evidência Fotográfica (HD)',
       `📌 Motivo: ${reason || 'Registro no PDV'}`,
       storeName ? `🏪 Loja: ${storeName}` : null,
       promoterName ? `👤 Promotor: ${promoterName}` : null,
@@ -28,21 +48,21 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
     const formData = new FormData();
     formData.append('chat_id', chatId);
     formData.append('caption', caption);
-    formData.append('photo', blob, filename);
+    formData.append(fieldName, blob, filename);
 
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    const response = await fetch(`https://api.telegram.org/bot${token}/${endpoint}`, {
       method: 'POST',
       body: formData,
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(20000),
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error('Telegram API erro:', response.status, errText);
+      console.error(`Telegram ${endpoint} erro:`, response.status, errText);
       return { sent: false, error: errText };
     }
 
-    return { sent: true };
+    return { sent: true, mode: useCompressedPhoto ? 'compressed' : 'hd' };
   } catch (err) {
     console.error('Erro ao enviar foto para o Telegram:', err.message);
     return { sent: false, error: err.message };

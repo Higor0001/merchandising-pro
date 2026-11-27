@@ -11,10 +11,10 @@ interface PhotoInputProps {
 }
 
 /**
- * Redimensiona e comprime a foto no navegador (máx 1280px, JPEG 80%)
- * para envio rápido no 4G e economia de espaço na fila offline.
+ * Redimensiona a foto preservando qualidade HD (máx 2560px, JPEG 92%)
+ * para nitidez em etiquetas/gôndolas e envio em HD ao Telegram.
  */
-async function compressImageFile(file: File, maxSize = 1280, quality = 0.8): Promise<{ compressed: File; previewUrl: string }> {
+async function compressImageFile(file: File, maxSize = 2560, quality = 0.92): Promise<{ compressed: File; previewUrl: string }> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
