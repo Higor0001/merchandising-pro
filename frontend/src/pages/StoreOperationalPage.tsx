@@ -22,6 +22,8 @@ import {
   Sparkles,
   RefreshCw,
   Trash2,
+  FileText,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -176,6 +178,62 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const [showAbandonModal, setShowAbandonModal] = useState(false);
   const [abandonReason, setAbandonReason] = useState('Loja Fechada');
   const [abandonNotes, setAbandonNotes] = useState('');
+  const [downloadingVisitId, setDownloadingVisitId] = useState<number | null>(null);
+
+  const handleDownloadVisitHistory = async (visitId: number, format: 'pdf' | 'excel') => {
+    setDownloadingVisitId(visitId);
+    try {
+      const [report, exporter] = await Promise.all([
+        apiFetch<any>(`/visits/${visitId}/report`),
+        import('../services/exportUtils'),
+      ]);
+      if (format === 'pdf') {
+        await exporter.exportVisitHistoryPDF(report);
+        notify('ok', `Histórico da Visita #${visitId} baixado em PDF!`);
+      } else {
+        exporter.exportVisitHistoryExcel(report);
+        notify('ok', `Histórico da Visita #${visitId} baixado em Excel!`);
+      }
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao baixar histórico da visita.');
+    } finally {
+      setDownloadingVisitId(null);
+    }
+  };
+
+  const handleDownloadStoreTimeline = async (format: 'pdf' | 'excel') => {
+    if (!storeData?.timeline?.length) return;
+    try {
+      const exporter = await import('../services/exportUtils');
+      const rows = storeData.timeline.map((v: any) => ({
+        Visita: `#${v.id}`,
+        Data: v.scheduled_date,
+        Status: v.status,
+        Promotor: v.promoter_name,
+        CheckIn: v.checkin_at || '-',
+        CheckOut: v.checkout_at || '-',
+        Duracao_Min: v.duration_minutes || 0,
+        Abastecidos_Un: v.total_replenished_qty || 0,
+        Validades: v.expiries?.length || 0,
+        Precos: v.price_checks?.length || 0,
+        Ocorrencias: v.occurrences?.length || 0,
+        Fotos: (v.evidences?.initial?.length || 0) + (v.evidences?.final?.length || 0),
+      }));
+      if (format === 'pdf') {
+        exporter.exportToPDF(
+          rows,
+          `Histórico Consolidado de Visitas — ${storeData.store?.name || `Loja #${storeId}`}`,
+          `historico_visitas_loja_${storeId}`
+        );
+        notify('ok', `Histórico de ${rows.length} visita(s) baixado em PDF!`);
+      } else {
+        exporter.exportToExcel(rows, `historico_visitas_loja_${storeId}`, 'Historico_Visitas');
+        notify('ok', `Histórico de ${rows.length} visita(s) baixado em Excel!`);
+      }
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao exportar histórico da loja.');
+    }
+  };
 
   const notify = (type: 'ok' | 'err', msg: string) => {
     setFeedback({ type, msg });
@@ -1909,6 +1967,27 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
             </div>
           ) : (
             <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-white px-4 py-3 rounded-2xl border border-slate-200">
+                <div className="text-xs text-slate-600">
+                  <b>{storeData.timeline.length}</b> visita(s) registrada(s) nesta loja
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadStoreTimeline('pdf')}
+                    className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> Baixar Histórico da Loja (PDF)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadStoreTimeline('excel')}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 transition"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+                  </button>
+                </div>
+              </div>
               {storeData.timeline.map((v: any) => (
                 <div key={v.id} className="bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
@@ -1920,17 +1999,38 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                         Promotor: <b>{v.promoter_name}</b> • Check-in: {v.checkin_at || '-'} • Check-out: {v.checkout_at || '-'} ({v.duration_minutes || 0} min)
                       </div>
                     </div>
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-bold ${
-                        v.status === 'Concluída'
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : v.status === 'Em Andamento'
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-amber-100 text-amber-700'
-                      }`}
-                    >
-                      {v.status}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={downloadingVisitId === v.id}
+                        onClick={() => void handleDownloadVisitHistory(v.id, 'pdf')}
+                        className="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-50"
+                        title="Baixar dossiê completo da visita em PDF (com fotos)"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        {downloadingVisitId === v.id ? 'Gerando...' : 'Baixar PDF'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={downloadingVisitId === v.id}
+                        onClick={() => void handleDownloadVisitHistory(v.id, 'excel')}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold inline-flex items-center gap-1 transition disabled:opacity-50"
+                        title="Baixar histórico detalhado da visita em Excel"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+                      </button>
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-bold ${
+                          v.status === 'Concluída'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : v.status === 'Em Andamento'
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {v.status}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Métricas rápidas da visita */}

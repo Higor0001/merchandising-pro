@@ -17,9 +17,11 @@ import {
   Bot,
   PackageSearch,
   Bell,
+  FileText,
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import type { MenuId } from '../components/Layout';
 
 function getGreeting(): string {
@@ -34,7 +36,25 @@ export const DashboardPage: React.FC<{
   onOpenStore: (storeId: number) => void;
 }> = ({ onNavigate, onOpenStore }) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [data, setData] = useState<any>(null);
+  const [downloadingVisitId, setDownloadingVisitId] = useState<number | null>(null);
+
+  const handleDownloadVisitPdf = async (visitId: number) => {
+    setDownloadingVisitId(visitId);
+    try {
+      const [report, exporter] = await Promise.all([
+        apiFetch<any>(`/visits/${visitId}/report`),
+        import('../services/exportUtils'),
+      ]);
+      await exporter.exportVisitHistoryPDF(report);
+      toast('ok', `PDF da Visita #${visitId} baixado!`);
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao gerar PDF da visita.');
+    } finally {
+      setDownloadingVisitId(null);
+    }
+  };
   const [storeOverview, setStoreOverview] = useState<any>(null);
   const [storeFilter, setStoreFilter] = useState<
     'todas' | 'rota' | 'andamento' | 'pendentes' | 'ocorrencias' | 'visitadas'
@@ -422,19 +442,30 @@ export const DashboardPage: React.FC<{
                     {v.scheduled_date} {v.scheduled_time} • {v.promoter_name}
                   </div>
                 </div>
-                <span
-                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold shrink-0 ${
-                    v.status === 'Concluída'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : v.status === 'Em Andamento'
-                      ? 'bg-blue-100 text-blue-700'
-                      : v.status === 'Não Atendida' || v.status === 'Cancelada'
-                      ? 'bg-red-100 text-red-700'
-                      : 'bg-amber-100 text-amber-800'
-                  }`}
-                >
-                  {v.status}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={downloadingVisitId === v.id}
+                    onClick={() => void handleDownloadVisitPdf(v.id)}
+                    title="Baixar histórico desta visita em PDF"
+                    className="px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-[11px] font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <FileText className="w-3 h-3" /> {downloadingVisitId === v.id ? '...' : 'PDF'}
+                  </button>
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                      v.status === 'Concluída'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : v.status === 'Em Andamento'
+                        ? 'bg-blue-100 text-blue-700'
+                        : v.status === 'Não Atendida' || v.status === 'Cancelada'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {v.status}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

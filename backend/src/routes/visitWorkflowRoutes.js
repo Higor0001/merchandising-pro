@@ -47,7 +47,7 @@ async function buildOperationalSummary(visitId, storeId) {
     (await col('visit_checklists')).find({ visit_id: vid }, { projection: { _id: 0 } }).toArray(),
     (await col('visit_evidences')).find({ visit_id: vid, store_id: sid, is_active: { $ne: 0 } }, { projection: { _id: 0 } }).toArray(),
     (await col('visit_diagnostics')).findOne({ visit_id: vid, store_id: sid }, { projection: { _id: 0 } }),
-    (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1, sku: 1 } }).toArray(),
+    (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1, sku: 1, ean: 1, weight: 1 } }).toArray(),
   ]);
 
   const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -79,20 +79,34 @@ async function buildOperationalSummary(visitId, storeId) {
     replenishments: replenishments.map((r) => ({
       ...r,
       product_name: prodMap[r.product_id]?.name || `Produto #${r.product_id}`,
+      product_weight: prodMap[r.product_id]?.weight || '',
+      product_ean: prodMap[r.product_id]?.ean || '',
     })),
     removed_products_qty: removedQty,
     expiries_count: expiries.length,
     expiries: expiries.map((e) => ({
       ...e,
       product_name: prodMap[e.product_id]?.name || `Produto #${e.product_id}`,
+      product_weight: prodMap[e.product_id]?.weight || '',
     })),
     ruptures_count: ruptures.length,
     occurrences_count: occurrences.length,
+    occurrences: occurrences.map((o) => ({
+      ...o,
+      product_name: o.product_id ? prodMap[o.product_id]?.name || `Produto #${o.product_id}` : '',
+    })),
     unresolved_pendencies_count: unresolvedPendencies.length,
     unresolved_pendencies: unresolvedPendencies,
     price_checks_count: priceChecks.length,
+    price_checks: priceChecks.map((p) => ({
+      ...p,
+      product_name: prodMap[p.product_id]?.name || `Produto #${p.product_id}`,
+      product_weight: prodMap[p.product_id]?.weight || '',
+    })),
     displays_count: displays.length,
+    displays,
     planograms_count: planograms.length,
+    planograms,
     checklist_total: checklists.length,
     checklist_done: checklistDone,
     evidences: {
@@ -360,6 +374,33 @@ router.get('/visits/:id/workflow-state', async (req, res, next) => {
     ]);
 
     res.json({
+      visit,
+      store,
+      promoter,
+      checklist,
+      summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- 4B. DOSSIÊ COMPLETO DA VISITA PARA DOWNLOAD (PDF / EXCEL) ---
+router.get('/visits/:id/report', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const visit = await (await col('visits')).findOne({ id: vid }, { projection: { _id: 0 } });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+
+    const [store, promoter, checklist, summary] = await Promise.all([
+      (await col('stores')).findOne({ id: visit.store_id }, { projection: { _id: 0 } }),
+      (await col('users')).findOne({ id: visit.promoter_id }, { projection: { _id: 0, id: 1, name: 1, role: 1 } }),
+      (await col('visit_checklists')).find({ visit_id: vid }, { projection: { _id: 0 } }).sort({ id: 1 }).toArray(),
+      buildOperationalSummary(vid, visit.store_id),
+    ]);
+
+    res.json({
+      generated_at: nowStr(),
       visit,
       store,
       promoter,

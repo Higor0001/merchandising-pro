@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Clock, MapPin, Play, Square, Plus, ListChecks, XCircle, Trash2 } from 'lucide-react';
+import { CheckCircle2, Clock, MapPin, Play, Square, Plus, ListChecks, XCircle, Trash2, FileText, FileSpreadsheet } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -24,7 +24,29 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
   const [newCheckItem, setNewCheckItem] = useState('');
   const [visitPhotoArea, setVisitPhotoArea] = useState('Corredor Principal');
   const [uploadingVisitPhotos, setUploadingVisitPhotos] = useState(false);
+  const [downloadingVisitId, setDownloadingVisitId] = useState<number | null>(null);
   const [activeActionTab, setActiveActionTab] = useState<'foto' | 'exposicao' | 'preco' | 'campanha' | 'ocorrencia'>('foto');
+
+  const handleDownloadVisit = async (visitId: number, format: 'pdf' | 'excel') => {
+    setDownloadingVisitId(visitId);
+    try {
+      const [report, exporter] = await Promise.all([
+        apiFetch<any>(`/visits/${visitId}/report`),
+        import('../services/exportUtils'),
+      ]);
+      if (format === 'pdf') {
+        await exporter.exportVisitHistoryPDF(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em PDF!`);
+      } else {
+        exporter.exportVisitHistoryExcel(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em Excel!`);
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao baixar histórico da visita.');
+    } finally {
+      setDownloadingVisitId(null);
+    }
+  };
 
   // Quick action states inside selected visit
   const [expBefore, setExpBefore] = useState<File | null>(null);
@@ -504,6 +526,22 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                   )}
                   <button onClick={() => openChecklist(v)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1">
                     <ListChecks className="w-3.5 h-3.5" /> Checklist & Detalhes
+                  </button>
+                  <button
+                    type="button"
+                    disabled={downloadingVisitId === v.id}
+                    onClick={() => void handleDownloadVisit(v.id, 'pdf')}
+                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> {downloadingVisitId === v.id ? 'Gerando...' : 'Baixar PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={downloadingVisitId === v.id}
+                    onClick={() => void handleDownloadVisit(v.id, 'excel')}
+                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
                   </button>
                   {(v.status === 'Pendente' || v.status === 'Em Andamento') && (
                     <button onClick={() => { setCancelVisitId(v.id); setCancelReason(''); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1">

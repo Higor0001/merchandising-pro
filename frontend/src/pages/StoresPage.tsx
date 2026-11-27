@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Store, Plus, History, Bot, X, ArrowRight, Search, MapPin, Phone } from 'lucide-react';
+import { Store, Plus, History, Bot, X, ArrowRight, Search, MapPin, Phone, FileText, FileSpreadsheet } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -27,6 +27,28 @@ export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> =
   });
   const [historyData, setHistoryData] = useState<any>(null);
   const [aiSummary, setAiSummary] = useState<any>(null);
+  const [downloadingVisitId, setDownloadingVisitId] = useState<number | null>(null);
+
+  const handleDownloadVisit = async (visitId: number, format: 'pdf' | 'excel') => {
+    setDownloadingVisitId(visitId);
+    try {
+      const [report, exporter] = await Promise.all([
+        apiFetch<any>(`/visits/${visitId}/report`),
+        import('../services/exportUtils'),
+      ]);
+      if (format === 'pdf') {
+        await exporter.exportVisitHistoryPDF(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em PDF!`);
+      } else {
+        exporter.exportVisitHistoryExcel(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em Excel!`);
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao baixar histórico da visita.');
+    } finally {
+      setDownloadingVisitId(null);
+    }
+  };
 
   const load = useCallback(() => {
     void apiFetch<any[]>('/stores')
@@ -268,9 +290,28 @@ export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> =
             <div className="space-y-2">
               <h3 className="font-bold text-sm text-slate-800">Últimas Visitas ({historyData.visits.length})</h3>
               {historyData.visits.map((v: any) => (
-                <div key={v.id} className="p-3 rounded-xl bg-slate-50 text-xs flex justify-between">
-                  <span><b>{v.scheduled_date}</b> — {v.promoter_name} ({v.status})</span>
-                  <span className="text-slate-500">{v.duration_minutes || 0} min</span>
+                <div key={v.id} className="p-3 rounded-xl bg-slate-50 text-xs flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    <b>#{v.id} • {v.scheduled_date}</b> — {v.promoter_name} ({v.status}) • {v.duration_minutes || 0} min
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={downloadingVisitId === v.id}
+                      onClick={() => void handleDownloadVisit(v.id, 'pdf')}
+                      className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <FileText className="w-3 h-3" /> {downloadingVisitId === v.id ? '...' : 'PDF'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={downloadingVisitId === v.id}
+                      onClick={() => void handleDownloadVisit(v.id, 'excel')}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold inline-flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <FileSpreadsheet className="w-3 h-3" /> Excel
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
