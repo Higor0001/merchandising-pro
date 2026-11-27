@@ -12,7 +12,8 @@ const { hashPasswordAsync, verifyPasswordAsync } = require('../src/db/database')
 const { authorize } = require('../src/middleware/auth');
 const { imageFileFilter } = require('../src/middleware/upload');
 const { buildHeuristicFallback, extractJsonObject, normalizeVisionPayload } = require('../src/services/aiService');
-const { normalizeAnnotations, renderAnnotatedImage } = require('../src/services/imageAnnotator');
+const { applyAuditWatermark, detectPanoramic, normalizeAnnotations, renderAnnotatedImage } = require('../src/services/imageAnnotator');
+const { deleteTelegramMessage } = require('../src/services/telegramService');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -138,5 +139,62 @@ test('imageAnnotator normaliza box_2d e gera imagem HD demarcada válida', async
   assert.equal(meta.height, 720);
   assert.equal(meta.format, 'jpeg');
 
+  const wm = await applyAuditWatermark({
+    imagePath: srcPath,
+    outputDir: tmpDir,
+    storeName: 'CASAGRANDE - GUANDU',
+    area: 'Ilha Promocional',
+    stage: 'INICIAL',
+    promoterName: 'Higor',
+  });
+  assert.ok(wm && fs.existsSync(wm.watermarkedPath));
+  const wmMeta = await sharp(wm.watermarkedPath).metadata();
+  assert.equal(wmMeta.width, 1280);
+  assert.equal(wmMeta.height, 720);
+  assert.match(wm.watermarkText, /CASAGRANDE - GUANDU/);
+  assert.match(wm.watermarkText, /Ilha Promocional/);
+  assert.equal(wm.isPanoramic, false);
+
+  // Teste específico de imagem panorâmica (3200x900, aspect ratio ~3.55)
+  assert.equal(detectPanoramic(3200, 900), true);
+  assert.equal(detectPanoramic(1280, 720), false);
+  const panoSrcPath = path.join(tmpDir, 'panorama.jpg');
+  await sharp({
+    create: { width: 3200, height: 900, channels: 3, background: { r: 28, g: 45, b: 68 } },
+  })
+    .jpeg({ quality: 90 })
+    .toFile(panoSrcPath);
+
+  const panoWm = await applyAuditWatermark({
+    imagePath: panoSrcPath,
+    outputDir: tmpDir,
+    storeName: 'CASAGRANDE - GUANDU',
+    area: 'Corredor Principal',
+    stage: 'INICIAL',
+    promoterName: 'Higor',
+  });
+  assert.ok(panoWm && fs.existsSync(panoWm.watermarkedPath));
+  assert.equal(panoWm.isPanoramic, true);
+  assert.match(panoWm.watermarkText, /Panorâmica/);
+  const panoWmMeta = await sharp(panoWm.watermarkedPath).metadata();
+  assert.equal(panoWmMeta.width, 3200);
+  assert.equal(panoWmMeta.height, 900);
+
+  const panoAnnot = await renderAnnotatedImage({
+    imagePath: panoSrcPath,
+    annotations: norm,
+    outputDir: tmpDir,
+    planogramScore: 91,
+    storeName: 'CASAGRANDE - GUANDU',
+    area: 'Corredor Principal',
+  });
+  assert.ok(panoAnnot && fs.existsSync(panoAnnot.annotatedPath));
+  assert.equal(panoAnnot.isPanoramic, true);
+
   await fs.promises.rm(tmpDir, { recursive: true, force: true });
+});
+
+test('telegramService.deleteTelegramMessage trata ausência de configuração/messageId com segurança', async () => {
+  const res = await deleteTelegramMessage({ messageId: null });
+  assert.equal(res.deleted, false);
 });

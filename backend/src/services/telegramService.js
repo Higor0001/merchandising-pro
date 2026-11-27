@@ -62,10 +62,55 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
       return { sent: false, error: errText };
     }
 
-    return { sent: true, mode: useCompressedPhoto ? 'compressed' : 'hd' };
+    const data = await response.json().catch(() => ({}));
+    const messageId = data?.result?.message_id ?? null;
+
+    return {
+      sent: true,
+      mode: useCompressedPhoto ? 'compressed' : 'hd',
+      message_id: messageId,
+      chat_id: chatId,
+    };
   } catch (err) {
     console.error('Erro ao enviar foto para o Telegram:', err.message);
     return { sent: false, error: err.message };
+  }
+}
+
+/**
+ * Apaga automaticamente uma mensagem/foto enviada anteriormente pelo bot no Telegram
+ * (usado quando o promotor exclui ou substitui uma foto errada no PDV).
+ */
+async function deleteTelegramMessage({ messageId, chatId }) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const targetChatId = chatId || process.env.TELEGRAM_CHAT_ID;
+
+  if (!token || !targetChatId || !messageId) {
+    return { deleted: false, reason: 'Telegram não configurado ou message_id ausente' };
+  }
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: targetChatId,
+        message_id: Number(messageId),
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn('Telegram deleteMessage aviso:', response.status, errText);
+      return { deleted: false, error: errText };
+    }
+
+    const data = await response.json().catch(() => ({}));
+    return { deleted: Boolean(data?.ok ?? true), message_id: Number(messageId) };
+  } catch (err) {
+    console.error('Erro ao apagar mensagem no Telegram:', err.message);
+    return { deleted: false, error: err.message };
   }
 }
 
@@ -103,4 +148,4 @@ async function sendMessageToTelegram({ text }) {
   }
 }
 
-module.exports = { sendPhotoToTelegram, sendMessageToTelegram };
+module.exports = { sendPhotoToTelegram, sendMessageToTelegram, deleteTelegramMessage };

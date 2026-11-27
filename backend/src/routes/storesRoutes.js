@@ -4,7 +4,8 @@ const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
-const { sendPhotoToTelegram } = require('../services/telegramService');
+const { sendPhotoToTelegram, deleteTelegramMessage } = require('../services/telegramService');
+const { applyAuditWatermark } = require('../services/imageAnnotator');
 const { canOperateVisit, parseUtcTimestamp } = require('../utils/security');
 
 const router = express.Router();
@@ -367,6 +368,7 @@ router.post('/visits/:id/cancel', async (req, res, next) => {
 });
 
 router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next) => {
+  let watermarkedPath = null;
   try {
     const vid = Number(req.params.id);
     const visitsCol = await col('visits');
@@ -381,26 +383,96 @@ router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next)
     if (!req.file) return res.status(400).json({ error: 'Nenhuma foto enviada.' });
 
     const store = await (await col('stores')).findOne({ id: visit.store_id });
-    const photos = JSON.parse(visit.photos_json || '[]');
-    const photoUrl = await saveFileToGridFS(req.file);
-    const caption = req.body?.caption || 'Foto da visita';
-    photos.push({ url: photoUrl, caption, created_at: new Date().toISOString() });
-    await visitsCol.updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
+    const area = req.body?.area || 'Gôndola Principal';
+    const caption = req.body?.caption || `Foto da visita — ${area}`;
+    const capturedAt = nowStr();
 
-    await sendPhotoToTelegram({
-      filePath: path.join(uploadDir, req.file.filename),
-      reason: `Registro de Visita (#${vid})`,
+    let fileToPersist = req.file;
+    let fileForTelegram = path.join(uploadDir, req.file.filename);
+    let isPanoramic = false;
+    try {
+      const wm = await applyAuditWatermark({
+        imagePath: req.file.path,
+        outputDir: uploadDir,
+        storeName: store?.name,
+        area,
+        promoterName: req.user?.name,
+        capturedAt,
+      });
+      if (wm?.watermarkedPath) {
+        watermarkedPath = wm.watermarkedPath;
+        fileToPersist = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+        fileForTelegram = wm.watermarkedPath;
+        isPanoramic = Boolean(wm.isPanoramic);
+      }
+    } catch (wmErr) {
+      console.error('Aviso ao aplicar marca d\'água na foto da visita:', wmErr.message);
+    }
+
+    const photos = JSON.parse(visit.photos_json || '[]');
+    const photoUrl = await saveFileToGridFS(fileToPersist);
+
+    const tgRes = await sendPhotoToTelegram({
+      filePath: fileForTelegram,
+      reason: `Registro de Visita — ${area}${isPanoramic ? ' (Panorâmica)' : ''} (#${vid})`,
       storeName: store?.name,
       promoterName: req.user?.name,
       details: caption,
     });
 
-    res.json({ photoUrl, photos });
+    const photoId = `vp-${Date.now()}-${Math.round(Math.random() * 1e4)}`;
+    photos.push({
+      photo_id: photoId,
+      url: photoUrl,
+      area,
+      caption,
+      is_panoramic: isPanoramic,
+      telegram_message_id: tgRes?.message_id || null,
+      telegram_chat_id: tgRes?.chat_id || null,
+      created_at: capturedAt,
+    });
+    await visitsCol.updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
+
+    res.json({ photo_id: photoId, photoUrl, area, is_panoramic: isPanoramic, photos, telegram_sent: Boolean(tgRes?.sent) });
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(watermarkedPath)]);
   }
+});
+
+router.delete('/visits/:id/photos/:photoId', async (req, res, next) => {
+  try {
+    const vid = Number(req.params.id);
+    const targetId = String(req.params.photoId || '');
+    const visitsCol = await col('visits');
+    const visit = await visitsCol.findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para remover fotos nesta visita.' });
+    }
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Não é permitido remover fotos de uma visita encerrada.' });
+    }
+
+    const photos = JSON.parse(visit.photos_json || '[]');
+    const idx = photos.findIndex((p, i) => String(p.photo_id ?? i) === targetId);
+    if (idx === -1) return res.status(404).json({ error: 'Foto não encontrada.' });
+
+    const [removed] = photos.splice(idx, 1);
+    let telegramDeleted = false;
+    if (removed?.telegram_message_id) {
+      const delRes = await deleteTelegramMessage({
+        messageId: removed.telegram_message_id,
+        chatId: removed.telegram_chat_id,
+      });
+      telegramDeleted = Boolean(delRes?.deleted);
+    }
+
+    await visitsCol.updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
+    await logAudit(req.user, 'DELETE_VISIT_PHOTO', 'visits', vid, `Foto removida da visita #${vid} | TG_DELETED=${telegramDeleted}`);
+    res.json({ success: true, photos, telegram_deleted: telegramDeleted });
+  } catch (err) { next(err); }
 });
 
 router.get('/visits/:id/checklist', async (req, res, next) => {

@@ -109,6 +109,110 @@ async function runIncrementalMigrations() {
       }
       await countersCol.insertOne({ _id: 'migration_pepsico_si5_clean_v1', seq: docs.length, migrated_at: createdAt });
     }
+
+    // 4. Atualização do catálogo PepsiCo v2: padroniza marcas/categorias, preenche gramaturas e adiciona novos SKUs recentes preservando IDs existentes
+    const alreadyUpdatedV2 = await countersCol.findOne({ _id: 'migration_pepsico_catalog_v2' });
+    if (!alreadyUpdatedV2 && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+      const productsCol = await col('products');
+      const brandsCol = await col('brands');
+      const migratedAt = nowStr();
+
+      const existingBrands = await brandsCol.find({}).toArray();
+      const brandByLower = new Map(existingBrands.map((b) => [String(b.name || '').trim().toLowerCase(), b]));
+
+      const ensureBrand = async (brandName) => {
+        const cleanName = String(brandName || 'PepsiCo').trim();
+        const key = cleanName.toLowerCase();
+        const found = brandByLower.get(key);
+        if (found) return found.id;
+        const id = await nextId('brands');
+        const doc = { id, name: cleanName, is_own: 1, color: '#1d4ed8' };
+        await brandsCol.insertOne(doc);
+        brandByLower.set(key, doc);
+        return id;
+      };
+
+      // Unificar grafias antigas de marcas (Lays -> Lay’s, Pingo dOuro -> Pingo d’Ouro)
+      const brandAliases = [
+        ['lays', 'Lay’s'],
+        ["lay's", 'Lay’s'],
+        ['pingo douro', 'Pingo d’Ouro'],
+        ["pingo d'ouro", 'Pingo d’Ouro'],
+      ];
+      for (const [oldLower, canonicalName] of brandAliases) {
+        const oldBrand = brandByLower.get(oldLower);
+        if (oldBrand && oldBrand.name !== canonicalName) {
+          const canonicalId = await ensureBrand(canonicalName);
+          if (canonicalId !== oldBrand.id) {
+            await productsCol.updateMany({ brand_id: oldBrand.id }, { $set: { brand_id: canonicalId } });
+            await brandsCol.deleteOne({ id: oldBrand.id });
+            brandByLower.delete(oldLower);
+          }
+        }
+      }
+
+      let upsertedCount = 0;
+      for (const item of pepsicoCatalog) {
+        const ean = String(item.ean || '').trim();
+        if (!ean || ean === 'A CONFERIR') continue;
+        const brandId = await ensureBrand(item.brand || 'PepsiCo');
+        const existing = await productsCol.findOne({ ean });
+
+        if (existing) {
+          await productsCol.updateOne(
+            { id: existing.id },
+            {
+              $set: {
+                name: item.name || existing.name,
+                brand_id: brandId,
+                category: item.category || existing.category || 'SNACKS & SALGADINHOS',
+                unit: item.unit || existing.unit || 'UN',
+                weight: item.weight || existing.weight || '',
+                ncm: item.ncm || existing.ncm || '',
+                cest_codigo: item.cest_codigo || existing.cest_codigo || '',
+                image_url: item.image_url || existing.image_url || '',
+                active: 1,
+                updated_at: migratedAt,
+              },
+            }
+          );
+        } else {
+          const id = await nextId('products');
+          await productsCol.insertOne({
+            id,
+            sku: `PEP-${ean}`,
+            ean,
+            name: item.name,
+            brand_id: brandId,
+            category: item.category || 'SNACKS & SALGADINHOS',
+            unit: item.unit || 'UN',
+            weight: item.weight || '',
+            system_price: Number(item.system_price || 0),
+            ncm: item.ncm || '',
+            cest_codigo: item.cest_codigo || '',
+            image_url: item.image_url || '',
+            min_stock: 10,
+            ideal_facings: 4,
+            source: item.source || 'pepsico_catalog_v2',
+            active: 1,
+            created_at: migratedAt,
+            updated_at: migratedAt,
+          });
+        }
+        upsertedCount++;
+      }
+
+      await productsCol.updateMany(
+        { ean: 'A CONFERIR', active: { $ne: 0 } },
+        { $set: { active: 0, deactivated_reason: 'Substituído pelo catálogo PepsiCo v2' } }
+      );
+
+      await countersCol.insertOne({
+        _id: 'migration_pepsico_catalog_v2',
+        seq: upsertedCount,
+        migrated_at: migratedAt,
+      });
+    }
   })().catch((err) => {
     migrationPromise = null;
     console.error('Erro ao executar migrations incrementais:', err.message);

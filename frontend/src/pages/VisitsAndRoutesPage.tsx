@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, MapPin, Play, Square, Plus, ListChecks, XCircle, Trash2 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -22,7 +22,8 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
   const [selectedVisit, setSelectedVisit] = useState<any>(null);
   const [checklist, setChecklist] = useState<any[]>([]);
   const [newCheckItem, setNewCheckItem] = useState('');
-  const [visitPhoto, setVisitPhoto] = useState<File | null>(null);
+  const [visitPhotoArea, setVisitPhotoArea] = useState('Corredor Principal');
+  const [uploadingVisitPhotos, setUploadingVisitPhotos] = useState(false);
   const [activeActionTab, setActiveActionTab] = useState<'foto' | 'exposicao' | 'preco' | 'campanha' | 'ocorrencia'>('foto');
 
   // Quick action states inside selected visit
@@ -165,18 +166,59 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
     }
   };
 
-  const handleUploadVisitPhoto = async () => {
-    if (!visitPhoto || !selectedVisit) return;
+  const handleAutoUploadVisitPhotos = async (files: File[]) => {
+    if (!files.length || !selectedVisit) return;
+    setUploadingVisitPhotos(true);
+    let okCount = 0;
+    let queuedCount = 0;
+    let latestPhotos: any[] | null = null;
     try {
-      const fd = new FormData();
-      fd.append('photo', visitPhoto);
-      fd.append('caption', 'Registro de visita no PDV');
-      const res = await apiFetch<any>(`/visits/${selectedVisit.id}/photos`, { method: 'POST', body: fd });
-      setVisitPhoto(null);
-      toast('ok', res?.offlineQueued ? 'Foto salva na fila offline!' : 'Foto anexada à visita e enviada ao Telegram!');
-      if (!res?.offlineQueued) void loadAll();
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append('photo', file);
+        fd.append('area', visitPhotoArea);
+        fd.append('caption', `Registro de visita — ${visitPhotoArea}`);
+        const res = await apiFetch<any>(`/visits/${selectedVisit.id}/photos`, { method: 'POST', body: fd });
+        if (res?.offlineQueued) queuedCount++;
+        else {
+          okCount++;
+          if (Array.isArray(res?.photos)) latestPhotos = res.photos;
+        }
+      }
+      if (latestPhotos) {
+        setSelectedVisit((prev: any) => (prev ? { ...prev, photos_json: JSON.stringify(latestPhotos) } : prev));
+      }
+      if (queuedCount > 0 && okCount === 0) {
+        toast('info', `${queuedCount} foto(s) salva(s) na fila offline!`);
+      } else {
+        toast('ok', `${okCount} foto(s) de "${visitPhotoArea}" enviada(s) automaticamente em HD ao Telegram!`);
+        void loadAll();
+      }
     } catch (err: any) {
       toast('err', err.message || 'Erro ao enviar foto.');
+    } finally {
+      setUploadingVisitPhotos(false);
+    }
+  };
+
+  const handleDeleteVisitPhoto = async (photoId: string) => {
+    if (!selectedVisit) return;
+    try {
+      const res = await apiFetch<any>(`/visits/${selectedVisit.id}/photos/${encodeURIComponent(photoId)}`, {
+        method: 'DELETE',
+      });
+      if (Array.isArray(res?.photos)) {
+        setSelectedVisit((prev: any) => (prev ? { ...prev, photos_json: JSON.stringify(res.photos) } : prev));
+      }
+      toast(
+        'ok',
+        res?.telegram_deleted
+          ? 'Foto removida do site e apagada automaticamente do Telegram!'
+          : 'Foto removida da visita.'
+      );
+      void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao remover foto.');
     }
   };
 
@@ -535,12 +577,62 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
 
                 {activeActionTab === 'foto' && (
                   <div className="space-y-2">
-                    <PhotoInput label="Foto da Visita" file={visitPhoto} onFileSelect={setVisitPhoto} />
-                    {visitPhoto && (
-                      <button onClick={handleUploadVisitPhoto} className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1">
-                        <Camera className="w-3.5 h-3.5" /> Enviar Foto da Visita
-                      </button>
-                    )}
+                    <select
+                      value={visitPhotoArea}
+                      onChange={(e) => setVisitPhotoArea(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border rounded-xl text-xs bg-white font-semibold"
+                    >
+                      {['Corredor Principal', 'Gôndola Principal', 'Ponta de Gôndola', 'Ilha Promocional', 'Checkout', 'Ponto Extra', 'Display', 'Estoque/Retaguarda'].map((a) => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                    <PhotoInput
+                      label={`Selecionar 1 ou Várias Fotos (${visitPhotoArea})`}
+                      onFilesSelect={(files) => void handleAutoUploadVisitPhotos(files)}
+                      multiple
+                      autoClear
+                      busy={uploadingVisitPhotos}
+                      busyText="Enviando em HD ao Telegram..."
+                    />
+                    {(() => {
+                      let visitPhotos: any[] = [];
+                      try {
+                        visitPhotos = JSON.parse(selectedVisit.photos_json || '[]');
+                      } catch {
+                        visitPhotos = [];
+                      }
+                      if (!visitPhotos.length) return null;
+                      return (
+                        <div className="grid grid-cols-2 gap-2 pt-1 max-h-48 overflow-y-auto">
+                          {visitPhotos.map((p: any, idx: number) => {
+                            const pid = String(p.photo_id ?? idx);
+                            return (
+                              <div key={pid} className="relative rounded-xl border bg-slate-50 overflow-hidden">
+                                <img src={p.url} alt={p.area || 'Foto'} className="w-full h-20 object-cover" />
+                                {p.is_panoramic && (
+                                  <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-indigo-600/90 text-white text-[9px] font-bold">
+                                    Panorâmica
+                                  </span>
+                                )}
+                                {selectedVisit.status !== 'Concluída' && selectedVisit.status !== 'Cancelada' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteVisitPhoto(pid)}
+                                    title="Apagar foto do site e do Telegram"
+                                    className="absolute top-1 right-1 p-1 rounded-full bg-red-600/90 text-white hover:bg-red-700"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                                <div className="px-1.5 py-1 text-[10px] font-semibold text-slate-600 truncate">
+                                  {p.area || p.caption || 'Foto'}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 

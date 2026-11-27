@@ -3,7 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const sharp = require('sharp');
 const { col } = require('../db/database');
-const { normalizeAnnotations, renderAnnotatedImage } = require('./imageAnnotator');
+const { detectPanoramic, normalizeAnnotations, renderAnnotatedImage } = require('./imageAnnotator');
 
 const DEFAULT_GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
@@ -24,7 +24,7 @@ async function prepareImageForVision(imagePath, maxDim = 1536, quality = 85) {
   };
 }
 
-function buildVisionPrompt({ storeLabel, ownBrands, planogramRef, notes, openIssues }) {
+function buildVisionPrompt({ storeLabel, ownBrands, planogramRef, notes, openIssues, isPanoramic = false }) {
   return [
     'Você é um auditor sênior de trade marketing e merchandising de varejo no Brasil (foco em marcas PepsiCo: Doritos, Cheetos, Ruffles, Lay’s, Fandangos, Pepsi, Gatorade, H2OH!, Quaker, Toddy, Toddynho, Torcida, Kero Coco, Lipton).',
     `Contexto: Loja "${storeLabel}".`,
@@ -32,11 +32,14 @@ function buildVisionPrompt({ storeLabel, ownBrands, planogramRef, notes, openIss
     planogramRef.length ? `Referência de planograma da loja: ${planogramRef.slice(0, 5).join('; ')}.` : null,
     openIssues.length ? `Ocorrências abertas na loja: ${openIssues.slice(0, 5).join('; ')}.` : null,
     notes ? `Observação do promotor: "${String(notes).slice(0, 300)}".` : null,
-    'Analise SOMENTE o que é claramente visível na fotografia da gôndola e demarque com precisão entre 2 e 6 áreas reais (rupturas/espaços vazios, blocos de marcas visíveis, etiquetas ausentes/problemas de exposição ou espaços de oportunidade).',
+    isPanoramic
+      ? 'ATENÇÃO — IMAGEM PANORÂMICA DETECTADA: Esta fotografia cobre um amplo ângulo horizontal de corredor/gôndola. Varra cuidadosamente DA ESQUERDA PARA A DIREITA por toda a extensão (xmin de 0 até 1000) e demarque entre 3 e 10 áreas reais ao longo do corredor/gôndola, mantendo caixas ajustadas proporcionalmente à largura panorâmica.'
+      : 'Analise SOMENTE o que é claramente visível na fotografia da gôndola e demarque com precisão entre 2 e 6 áreas reais (rupturas/espaços vazios, blocos de marcas visíveis, etiquetas ausentes/problemas de exposição ou espaços de oportunidade).',
+    'Identifique também o tipo de área do PDV em detected_area (escolha exatamente uma: "Corredor Principal", "Gôndola Principal", "Ponta de Gôndola", "Ilha Promocional", "Checkout", "Ponto Extra", "Display" ou "Estoque/Retaguarda").',
     'NÃO invente produtos ou marcas que não consiga ler claramente na foto.',
     'Use coordenadas normalizadas de 0 a 1000 em box_2d no formato [ymin, xmin, ymax, xmax] (0,0 = topo esquerdo; 1000,1000 = base direita), ajustando as bordas exatamente ao redor do objeto/buraco.',
     'Responda EXCLUSIVAMENTE em JSON válido (sem markdown) no formato exato:',
-    '{"detected_ruptures":["string"],"detected_brands":[{"brand":"string","facings":4,"confidence":85}],"exposure_issues":["string"],"planogram_score":80,"suggestions":["string"],"extra_point_opportunities":["string"],"auto_report":"resumo objetivo em português (máx 2 frases)","confidence":85,"annotations":[{"label":"Ruptura: Espaço vazio","category":"rupture","box_2d":[300,200,520,450]}]}',
+    '{"detected_area":"Gôndola Principal","detected_ruptures":["string"],"detected_brands":[{"brand":"string","facings":4,"confidence":85}],"exposure_issues":["string"],"planogram_score":80,"suggestions":["string"],"extra_point_opportunities":["string"],"auto_report":"resumo objetivo em português (máx 2 frases)","confidence":85,"annotations":[{"label":"Ruptura: Espaço vazio","category":"rupture","box_2d":[300,200,520,450]}]}',
     'Valores permitidos em annotations[].category: "rupture", "brand", "exposure", "opportunity".',
   ]
     .filter(Boolean)
@@ -78,6 +81,7 @@ function normalizeVisionPayload(parsed, fallbackReport) {
   const annotations = normalizeAnnotations(parsed?.annotations);
 
   return {
+    detected_area: String(parsed?.detected_area || '').trim(),
     detected_ruptures: toStrArray(parsed?.detected_ruptures, ['Nenhuma ruptura evidente detectada na imagem.']),
     detected_brands: detectedBrands,
     exposure_issues: toStrArray(parsed?.exposure_issues, ['Sem desvios graves de exposição identificados.']),
@@ -178,7 +182,7 @@ async function callGeminiVisionJson({ imagePath, prompt, maxDim = 1536 }) {
  * 2ª passagem de auto-verificação visual:
  * Desenha as caixas da 1ª passagem sobre a imagem e pede à IA para conferir e corrigir desvios.
  */
-async function runSecondPassVerification({ provider, imagePath, annotations, planogramScore, storeName }) {
+async function runSecondPassVerification({ provider, imagePath, annotations, planogramScore, storeName, isPanoramic = false }) {
   if (!annotations || annotations.length === 0) {
     return { annotations: [], selfVerified: false, verificationNotes: '' };
   }
@@ -198,10 +202,11 @@ async function runSecondPassVerification({ provider, imagePath, annotations, pla
     }
 
     const verifyPrompt = buildVerificationPrompt(draft.annotations);
+    const verifyMaxDim = isPanoramic ? 1600 : 1280;
     const res =
       provider === 'groq_vision'
-        ? await callGroqVisionJson({ imagePath: draft.annotatedPath, prompt: verifyPrompt, maxDim: 1280, maxTokens: 900 })
-        : await callGeminiVisionJson({ imagePath: draft.annotatedPath, prompt: verifyPrompt, maxDim: 1280 });
+        ? await callGroqVisionJson({ imagePath: draft.annotatedPath, prompt: verifyPrompt, maxDim: verifyMaxDim, maxTokens: 1100 })
+        : await callGeminiVisionJson({ imagePath: draft.annotatedPath, prompt: verifyPrompt, maxDim: verifyMaxDim });
 
     const verifiedList = normalizeAnnotations(res?.parsed?.verified_annotations);
     const notes = String(res?.parsed?.verification_notes || 'Caixas auditadas automaticamente na 2ª passagem.').trim();
@@ -319,28 +324,40 @@ async function analyzeShelfImage({ storeId, imagePath, notes }) {
   );
 
   let fallbackReason = '';
+  let isPanoramic = false;
 
   if (imagePath && fs.existsSync(imagePath)) {
-    const prompt = buildVisionPrompt({ storeLabel, ownBrands, planogramRef, notes, openIssues });
+    try {
+      const rotatedBuf = await sharp(imagePath).rotate().toBuffer();
+      const meta = await sharp(rotatedBuf).metadata();
+      isPanoramic = detectPanoramic(meta.width, meta.height);
+    } catch {
+      isPanoramic = false;
+    }
+
+    const visionMaxDim = isPanoramic ? 2048 : 1536;
+    const prompt = buildVisionPrompt({ storeLabel, ownBrands, planogramRef, notes, openIssues, isPanoramic });
 
     // 1. Prioridade: Groq Vision (plano gratuito, 2 passos de auto-verificação)
     if ((process.env.GROQ_API_KEY || '').trim()) {
       try {
-        const res = await callGroqVisionJson({ imagePath, prompt });
+        const res = await callGroqVisionJson({ imagePath, prompt, maxDim: visionMaxDim, maxTokens: isPanoramic ? 1500 : 1200 });
         if (res?.parsed) {
-          const base = normalizeVisionPayload(res.parsed, `Análise visual concluída para ${storeLabel}.`);
+          const base = normalizeVisionPayload(res.parsed, `Análise visual${isPanoramic ? ' panorâmica' : ''} concluída para ${storeLabel}.`);
           const verified = await runSecondPassVerification({
             provider: 'groq_vision',
             imagePath,
             annotations: base.annotations,
             planogramScore: base.planogram_score,
             storeName: store?.name,
+            isPanoramic,
           });
           return {
             ...base,
             annotations: verified.annotations,
             self_verified: verified.selfVerified,
             verification_notes: verified.verificationNotes,
+            is_panoramic: isPanoramic,
             analysis_mode: 'groq_vision',
             model_used: res.model,
           };
@@ -354,21 +371,23 @@ async function analyzeShelfImage({ storeId, imagePath, notes }) {
     // 2. Fallback gratuito: Google Gemini Vision (2 passos de auto-verificação)
     if ((process.env.GEMINI_API_KEY || '').trim()) {
       try {
-        const res = await callGeminiVisionJson({ imagePath, prompt });
+        const res = await callGeminiVisionJson({ imagePath, prompt, maxDim: visionMaxDim });
         if (res?.parsed) {
-          const base = normalizeVisionPayload(res.parsed, `Análise visual concluída para ${storeLabel}.`);
+          const base = normalizeVisionPayload(res.parsed, `Análise visual${isPanoramic ? ' panorâmica' : ''} concluída para ${storeLabel}.`);
           const verified = await runSecondPassVerification({
             provider: 'gemini_vision',
             imagePath,
             annotations: base.annotations,
             planogramScore: base.planogram_score,
             storeName: store?.name,
+            isPanoramic,
           });
           return {
             ...base,
             annotations: verified.annotations,
             self_verified: verified.selfVerified,
             verification_notes: verified.verificationNotes,
+            is_panoramic: isPanoramic,
             analysis_mode: 'gemini_vision',
             model_used: res.model,
           };
@@ -382,15 +401,18 @@ async function analyzeShelfImage({ storeId, imagePath, notes }) {
     fallbackReason = 'nenhuma imagem enviada';
   }
 
-  return buildHeuristicFallback({
-    storeLabel,
-    products,
-    brandMap,
-    recentReplenishments,
-    recentOccurrences,
-    notes,
-    fallbackReason,
-  });
+  return {
+    ...buildHeuristicFallback({
+      storeLabel,
+      products,
+      brandMap,
+      recentReplenishments,
+      recentOccurrences,
+      notes,
+      fallbackReason,
+    }),
+    is_panoramic: isPanoramic,
+  };
 }
 
 async function generateStoreSummary(storeId) {

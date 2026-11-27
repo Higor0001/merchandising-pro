@@ -86,6 +86,12 @@ async function upsertSi5ItemsToCatalog(items = []) {
     const price = Number(raw?.preco_medio || raw?.preco || 0);
     const category = String(raw?.categoria || 'Geral').trim() || 'Geral';
     const unit = String(raw?.embalagem || 'UN').trim() || 'UN';
+    const weightMatch = String(raw?.peso_liquido || raw?.gramatura || name).match(
+      /(\d+(?:[.,]\d+)?)\s*(kg|grs?|g|ml|lts?|l)\b/i
+    );
+    const weight = String(
+      raw?.peso_liquido || raw?.gramatura || (weightMatch ? `${weightMatch[1]} ${weightMatch[2].toLowerCase().replace(/^grs?$/, 'g').replace(/^lts?$/, 'L').replace(/^l$/, 'L')}` : '')
+    ).trim();
     const imageUrl = String(raw?.imagem_url || '').trim();
     const ncm = String(raw?.ncm || '').trim();
     const cestCodigo = String(raw?.cest_codigo || '').trim();
@@ -100,6 +106,7 @@ async function upsertSi5ItemsToCatalog(items = []) {
             brand_id: brandId ?? existing.brand_id,
             category,
             unit,
+            weight: weight || existing.weight || '',
             system_price: price > 0 ? price : existing.system_price,
             image_url: imageUrl || existing.image_url || '',
             ncm: ncm || existing.ncm || '',
@@ -124,6 +131,7 @@ async function upsertSi5ItemsToCatalog(items = []) {
         brand_id: brandId,
         category,
         unit,
+        weight,
         system_price: price,
         image_url: imageUrl,
         ncm,

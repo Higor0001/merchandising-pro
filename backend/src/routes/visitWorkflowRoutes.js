@@ -4,7 +4,8 @@ const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
-const { sendPhotoToTelegram } = require('../services/telegramService');
+const { sendPhotoToTelegram, deleteTelegramMessage } = require('../services/telegramService');
+const { applyAuditWatermark } = require('../services/imageAnnotator');
 const { canOperateVisit, getBrazilDateStr, getBrazilTimeStr, getBrazilDayName } = require('../utils/security');
 
 const router = express.Router();
@@ -372,6 +373,7 @@ router.get('/visits/:id/workflow-state', async (req, res, next) => {
 
 // --- 5. EVIDÊNCIAS FOTOGRÁFICAS (INICIAL / COMPLEMENTAR / FINAL) ---
 router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, next) => {
+  let watermarkedPath = null;
   try {
     const vid = Number(req.params.id);
     const visit = await (await col('visits')).findOne({ id: vid });
@@ -389,9 +391,80 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
     const stage = ['SELFIE_ENTRADA', 'INICIAL', 'COMPLEMENTAR', 'FINAL'].includes(req.body?.stage) ? req.body.stage : 'COMPLEMENTAR';
     const area = req.body?.area || 'Gôndola Principal';
     const caption = req.body?.caption || `Foto ${stage} — ${area}`;
+    const replaceEvidenceId = req.body?.replace_evidence_id ? Number(req.body.replace_evidence_id) : null;
     const capturedAt = nowStr();
+    const store = await (await col('stores')).findOne({ id: visit.store_id });
 
-    const photoUrl = await saveFileToGridFS(req.file);
+    // Aplicar marca d'água discreta (loja auditada + área/tipo + data/hora Brasília) em HD
+    let fileToPersist = req.file;
+    let fileForTelegram = path.join(uploadDir, req.file.filename);
+    let isPanoramic = false;
+    try {
+      const wm = await applyAuditWatermark({
+        imagePath: req.file.path,
+        outputDir: uploadDir,
+        storeName: store?.name,
+        area,
+        stage,
+        promoterName: req.user?.name,
+        capturedAt,
+      });
+      if (wm?.watermarkedPath) {
+        watermarkedPath = wm.watermarkedPath;
+        fileToPersist = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+        fileForTelegram = wm.watermarkedPath;
+        isPanoramic = Boolean(wm.isPanoramic);
+      }
+    } catch (wmErr) {
+      console.error('Aviso ao aplicar marca d\'água na evidência:', wmErr.message);
+    }
+
+    const photoUrl = await saveFileToGridFS(fileToPersist);
+
+    // Se for substituição direta de foto errada, apaga a anterior do site e do Telegram automaticamente
+    let replacedTelegramDeleted = false;
+    const evCol = await col('visit_evidences');
+    let replacedOldUrl = null;
+    if (replaceEvidenceId) {
+      const oldEv = await evCol.findOne({ id: replaceEvidenceId, visit_id: vid, is_active: { $ne: 0 } });
+      if (oldEv) {
+        replacedOldUrl = oldEv.photo_url || null;
+        if (oldEv.telegram_message_id) {
+          const delRes = await deleteTelegramMessage({
+            messageId: oldEv.telegram_message_id,
+            chatId: oldEv.telegram_chat_id,
+          });
+          replacedTelegramDeleted = Boolean(delRes?.deleted);
+        }
+        await evCol.updateOne(
+          { id: oldEv.id },
+          {
+            $set: {
+              is_active: 0,
+              replaced_at: capturedAt,
+              replaced_by: req.user.id,
+              telegram_deleted: replacedTelegramDeleted,
+            },
+          }
+        );
+        await logAudit(
+          req.user,
+          'REPLACE_EVIDENCE',
+          'visit_evidences',
+          oldEv.id,
+          `Foto #${oldEv.id} substituída | TG_DELETED=${replacedTelegramDeleted}`
+        );
+      }
+    }
+
+    const tgRes = await sendPhotoToTelegram({
+      filePath: fileForTelegram,
+      reason: `Evidência ${stage} — ${area}${isPanoramic ? ' (Panorâmica)' : ''} (Visita #${vid})`,
+      storeName: store?.name,
+      promoterName: req.user?.name,
+      details: caption,
+    });
+
     const id = await nextId('visit_evidences');
     const doc = {
       id,
@@ -402,31 +475,44 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
       area,
       caption,
       photo_url: photoUrl,
+      is_panoramic: isPanoramic,
+      telegram_message_id: tgRes?.message_id || null,
+      telegram_chat_id: tgRes?.chat_id || null,
       captured_at: capturedAt,
       is_active: 1,
     };
-    await (await col('visit_evidences')).insertOne(doc);
+    await evCol.insertOne(doc);
 
     // Sincronizar também em photos_json para compatibilidade legada
-    const photos = JSON.parse(visit.photos_json || '[]');
-    photos.push({ url: photoUrl, caption: `[${stage}] ${area}: ${caption}`, created_at: new Date().toISOString() });
+    const photos = JSON.parse(visit.photos_json || '[]').filter((p) => !replacedOldUrl || p.url !== replacedOldUrl);
+    photos.push({
+      photo_id: id,
+      url: photoUrl,
+      area,
+      is_panoramic: isPanoramic,
+      telegram_message_id: tgRes?.message_id || null,
+      telegram_chat_id: tgRes?.chat_id || null,
+      caption: `[${stage}] ${area}: ${caption}`,
+      created_at: new Date().toISOString(),
+    });
     await (await col('visits')).updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
 
-    const store = await (await col('stores')).findOne({ id: visit.store_id });
-    await sendPhotoToTelegram({
-      filePath: path.join(uploadDir, req.file.filename),
-      reason: `Evidência ${stage} — ${area} (Visita #${vid})`,
-      storeName: store?.name,
-      promoterName: req.user?.name,
-      details: caption,
+    await logAudit(
+      req.user,
+      'UPLOAD_EVIDENCE',
+      'visit_evidences',
+      id,
+      `Foto ${stage} (${area}${isPanoramic ? ', Panorâmica' : ''}) na visita #${vid} | TG=${Boolean(tgRes?.sent)}`
+    );
+    res.status(201).json({
+      ...doc,
+      telegram_sent: Boolean(tgRes?.sent),
+      replaced_telegram_deleted: replacedTelegramDeleted,
     });
-
-    await logAudit(req.user, 'UPLOAD_EVIDENCE', 'visit_evidences', id, `Foto ${stage} (${area}) na visita #${vid}`);
-    res.status(201).json(doc);
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(watermarkedPath)]);
   }
 });
 
@@ -448,9 +534,45 @@ router.delete('/visits/:id/evidences/:evId', async (req, res, next) => {
     const ev = await evCol.findOne({ id: evId, visit_id: vid });
     if (!ev) return res.status(404).json({ error: 'Evidência não encontrada.' });
 
-    await evCol.updateOne({ id: evId }, { $set: { is_active: 0, replaced_at: nowStr(), replaced_by: req.user.id } });
-    await logAudit(req.user, 'RETAKE_EVIDENCE', 'visit_evidences', evId, `Foto #${evId} refeita antes da confirmação`);
-    res.json({ success: true });
+    // Apagar automaticamente a mensagem/foto enviada anteriormente pelo bot no Telegram
+    let telegramDeleted = false;
+    if (ev.telegram_message_id) {
+      const delRes = await deleteTelegramMessage({
+        messageId: ev.telegram_message_id,
+        chatId: ev.telegram_chat_id,
+      });
+      telegramDeleted = Boolean(delRes?.deleted);
+    }
+
+    await evCol.updateOne(
+      { id: evId },
+      {
+        $set: {
+          is_active: 0,
+          replaced_at: nowStr(),
+          replaced_by: req.user.id,
+          telegram_deleted: telegramDeleted,
+        },
+      }
+    );
+
+    if (ev.photo_url) {
+      try {
+        const photos = JSON.parse(visit.photos_json || '[]').filter((p) => p.url !== ev.photo_url);
+        await (await col('visits')).updateOne({ id: vid }, { $set: { photos_json: JSON.stringify(photos) } });
+      } catch {
+        // ignore malformed photos_json
+      }
+    }
+
+    await logAudit(
+      req.user,
+      'RETAKE_EVIDENCE',
+      'visit_evidences',
+      evId,
+      `Foto #${evId} apagada/refeita | TG_DELETED=${telegramDeleted}`
+    );
+    res.json({ success: true, telegram_deleted: telegramDeleted });
   } catch (err) {
     next(err);
   }

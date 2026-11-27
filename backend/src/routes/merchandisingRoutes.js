@@ -5,6 +5,7 @@ const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
+const { applyAuditWatermark } = require('../services/imageAnnotator');
 const { escapeRegex } = require('../utils/security');
 const {
   isSi5Configured,
@@ -52,7 +53,7 @@ router.get('/products', async (req, res, next) => {
     if (brand_id) filter.brand_id = Number(brand_id);
     if (q && String(q).trim()) {
       const regex = { $regex: escapeRegex(String(q).trim()), $options: 'i' };
-      filter.$or = [{ name: regex }, { ean: regex }, { sku: regex }, { category: regex }];
+      filter.$or = [{ name: regex }, { ean: regex }, { sku: regex }, { category: regex }, { weight: regex }];
     }
 
     const [products, brands] = await Promise.all([
@@ -73,7 +74,7 @@ router.get('/products', async (req, res, next) => {
 
 router.post('/products', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
-    const { sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings } = req.body || {};
+    const { sku, ean, name, brand_id, category, unit, weight, system_price, min_stock, ideal_facings } = req.body || {};
     if (!sku || !ean || !name || !category) {
       return res.status(400).json({ error: 'SKU, EAN, nome e categoria são obrigatórios.' });
     }
@@ -90,6 +91,7 @@ router.post('/products', authorize('admin', 'supervisor'), async (req, res, next
       brand_id: brand_id ? Number(brand_id) : null,
       category,
       unit: unit || 'UN',
+      weight: String(weight || '').trim(),
       system_price: Number(system_price || 0),
       min_stock: Number(min_stock || 10),
       ideal_facings: Number(ideal_facings || 4),
@@ -235,15 +237,66 @@ router.post(
   upload.fields([{ name: 'photo_before', maxCount: 1 }, { name: 'photo_after', maxCount: 1 }]),
   enforceVisitExecutionIntegrity,
   async (req, res, next) => {
+    let wmBeforePath = null;
+    let wmAfterPath = null;
     try {
       const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
       if (!store_id || !category || !exposure_type) {
         return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
       }
+      const store = await (await col('stores')).findOne({ id: Number(store_id) });
+      const capturedAt = nowStr();
       const beforeFile = req.files?.photo_before?.[0];
       const afterFile = req.files?.photo_after?.[0];
-      const photoBefore = beforeFile ? await saveFileToGridFS(beforeFile) : '';
-      const photoAfter = afterFile ? await saveFileToGridFS(afterFile) : '';
+
+      let persistBefore = beforeFile;
+      let tgBeforePath = beforeFile ? path.join(uploadDir, beforeFile.filename) : null;
+      if (beforeFile) {
+        try {
+          const wm = await applyAuditWatermark({
+            imagePath: beforeFile.path,
+            outputDir: uploadDir,
+            storeName: store?.name,
+            area: exposure_type,
+            stage: 'INICIAL',
+            promoterName: req.user?.name,
+            capturedAt,
+          });
+          if (wm?.watermarkedPath) {
+            wmBeforePath = wm.watermarkedPath;
+            persistBefore = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+            tgBeforePath = wm.watermarkedPath;
+          }
+        } catch {
+          // fallback original
+        }
+      }
+
+      let persistAfter = afterFile;
+      let tgAfterPath = afterFile ? path.join(uploadDir, afterFile.filename) : null;
+      if (afterFile) {
+        try {
+          const wm = await applyAuditWatermark({
+            imagePath: afterFile.path,
+            outputDir: uploadDir,
+            storeName: store?.name,
+            area: exposure_type,
+            stage: 'FINAL',
+            promoterName: req.user?.name,
+            capturedAt,
+          });
+          if (wm?.watermarkedPath) {
+            wmAfterPath = wm.watermarkedPath;
+            persistAfter = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+            tgAfterPath = wm.watermarkedPath;
+          }
+        } catch {
+          // fallback original
+        }
+      }
+
+      const photoBefore = persistBefore ? await saveFileToGridFS(persistBefore) : '';
+      const photoAfter = persistAfter ? await saveFileToGridFS(persistAfter) : '';
 
       const id = await nextId('displays_exposures');
       await (await col('displays_exposures')).insertOne({
@@ -261,24 +314,23 @@ router.post(
         photo_before: photoBefore,
         photo_after: photoAfter,
         notes: notes || '',
-        created_at: nowStr(),
+        created_at: capturedAt,
       });
 
-      const store = await (await col('stores')).findOne({ id: Number(store_id) });
       const details = `Categoria: ${category} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
 
-      if (beforeFile) {
+      if (tgBeforePath) {
         await sendPhotoToTelegram({
-          filePath: path.join(uploadDir, beforeFile.filename),
+          filePath: tgBeforePath,
           reason: `Exposição (${exposure_type}) — Foto ANTES`,
           storeName: store?.name,
           promoterName: req.user?.name,
           details,
         });
       }
-      if (afterFile) {
+      if (tgAfterPath) {
         await sendPhotoToTelegram({
-          filePath: path.join(uploadDir, afterFile.filename),
+          filePath: tgAfterPath,
           reason: `Exposição (${exposure_type}) — Foto DEPOIS`,
           storeName: store?.name,
           promoterName: req.user?.name,
@@ -294,6 +346,8 @@ router.post(
       await Promise.all([
         cleanupUploadedFile(req.files?.photo_before?.[0]),
         cleanupUploadedFile(req.files?.photo_after?.[0]),
+        cleanupUploadedFile(wmBeforePath),
+        cleanupUploadedFile(wmAfterPath),
       ]);
     }
   }

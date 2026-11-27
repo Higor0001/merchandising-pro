@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Store,
   MapPin,
-  Camera,
   CheckCircle2,
   AlertTriangle,
   ClipboardCheck,
@@ -22,6 +21,7 @@ import {
   ShieldAlert,
   Sparkles,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -49,13 +49,14 @@ const STAGES = [
 ] as const;
 
 const AREAS = [
+  'Corredor Principal',
   'Gôndola Principal',
-  'Ponto Extra',
-  'Display',
   'Ponta de Gôndola',
   'Ilha Promocional',
-  'Estoque/Retaguarda',
   'Checkout',
+  'Ponto Extra',
+  'Display',
+  'Estoque/Retaguarda',
 ];
 
 function stageIndex(stage?: string): number {
@@ -78,13 +79,11 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const [brands, setBrands] = useState<any[]>([]);
   const [syncingSi5, setSyncingSi5] = useState(false);
 
-  // Step 2: Selfie + Initial & Complementary Photo states
-  const [selfieFile, setSelfieFile] = useState<File | null>(null);
-  const [initialArea, setInitialArea] = useState('Gôndola Principal');
-  const [initialFile, setInitialFile] = useState<File | null>(null);
-  const [compArea, setCompArea] = useState('Ponto Extra');
-  const [compFile, setCompFile] = useState<File | null>(null);
+  // Step 2: Selfie + Initial & Complementary Photo states (envio automático imediato)
+  const [initialArea, setInitialArea] = useState('Corredor Principal');
+  const [compArea, setCompArea] = useState('Ilha Promocional');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [uploadProgressText, setUploadProgressText] = useState('');
 
   // Step 3: Diagnostic 11 questions
   const [diag, setDiag] = useState({
@@ -163,8 +162,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const [occPhoto, setOccPhoto] = useState<File | null>(null);
 
   // Step 5: Final Photo
-  const [finalArea, setFinalArea] = useState('Gôndola Principal');
-  const [finalFile, setFinalFile] = useState<File | null>(null);
+  const [finalArea, setFinalArea] = useState('Corredor Principal');
 
   // Step 6: Checkout
   const [checkoutForm, setCheckoutForm] = useState({
@@ -263,42 +261,107 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     }
   };
 
-  // Etapa 2 / 5: Upload de Evidência
-  const handleUploadEvidence = async (stage: 'SELFIE_ENTRADA' | 'INICIAL' | 'COMPLEMENTAR' | 'FINAL', file: File | null, area: string) => {
-    if (!file || !workflow?.visit) return;
+  // Etapa 2 / 5: Upload automático imediato de 1 ou várias evidências (salva com marca d'água HD e envia ao Telegram na hora)
+  const handleAutoUploadEvidences = async (
+    stage: 'SELFIE_ENTRADA' | 'INICIAL' | 'COMPLEMENTAR' | 'FINAL',
+    files: File[],
+    area: string
+  ) => {
+    if (!files.length || !workflow?.visit) return;
     setUploadingPhoto(true);
+    let sentCount = 0;
+    let queuedCount = 0;
     try {
-      const fd = new FormData();
-      fd.append('photo', file);
-      fd.append('stage', stage);
-      fd.append('area', area);
-      fd.append('caption', stage === 'SELFIE_ENTRADA' ? 'Selfie em frente ao estabelecimento' : `Evidência ${stage} - ${area}`);
-      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
-      if (stage === 'SELFIE_ENTRADA') setSelfieFile(null);
-      if (stage === 'INICIAL') setInitialFile(null);
-      if (stage === 'COMPLEMENTAR') setCompFile(null);
-      if (stage === 'FINAL') setFinalFile(null);
-      if (res?.offlineQueued) {
-        notify('ok', 'Foto salva na fila offline (IndexedDB) e será enviada automaticamente ao reconectar.');
-        return;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgressText(
+          files.length > 1
+            ? `Enviando foto ${i + 1} de ${files.length} (${area}) em HD ao Telegram...`
+            : `Enviando foto (${area}) com marca d'água HD ao Telegram...`
+        );
+        const fd = new FormData();
+        fd.append('photo', file);
+        fd.append('stage', stage);
+        fd.append('area', area);
+        fd.append(
+          'caption',
+          stage === 'SELFIE_ENTRADA' ? 'Selfie em frente ao estabelecimento' : `Evidência ${stage} - ${area}`
+        );
+        const res = await apiFetch<any>(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
+        if (res?.offlineQueued) queuedCount++;
+        else sentCount++;
       }
-      await refreshWorkflow(workflow.visit.id);
-      notify('ok', stage === 'SELFIE_ENTRADA' ? 'Selfie na entrada do estabelecimento registrada!' : `Fotografia ${stage.toLowerCase()} registrada com data/hora e vinculada à loja!`);
+
+      if (sentCount > 0) {
+        await refreshWorkflow(workflow.visit.id);
+      }
+      if (queuedCount > 0 && sentCount === 0) {
+        notify('ok', `${queuedCount} foto(s) salva(s) na fila offline (IndexedDB) e serão enviadas ao reconectar.`);
+      } else {
+        notify(
+          'ok',
+          stage === 'SELFIE_ENTRADA'
+            ? 'Selfie registrada com marca d\'água e enviada em HD ao Telegram!'
+            : `${sentCount} foto(s) de "${area}" salva(s) com marca d'água e enviada(s) automaticamente em HD ao Telegram!`
+        );
+      }
     } catch (err: any) {
-      notify('err', err.message);
+      notify('err', err.message || 'Erro ao enviar foto.');
     } finally {
       setUploadingPhoto(false);
+      setUploadProgressText('');
     }
   };
 
   const handleRetakeEvidence = async (evId: number) => {
     if (!workflow?.visit) return;
     try {
-      await apiFetch(`/visits/${workflow.visit.id}/evidences/${evId}`, { method: 'DELETE' });
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/evidences/${evId}`, { method: 'DELETE' });
       await refreshWorkflow(workflow.visit.id);
-      notify('ok', 'Foto removida para refazer.');
+      notify(
+        'ok',
+        res?.telegram_deleted
+          ? 'Foto apagada do site e removida automaticamente do Telegram pelo bot!'
+          : 'Foto removida do site!'
+      );
     } catch (err: any) {
       notify('err', err.message);
+    }
+  };
+
+  const handleReplaceEvidence = async (
+    stage: 'SELFIE_ENTRADA' | 'INICIAL' | 'COMPLEMENTAR' | 'FINAL',
+    ev: any,
+    file: File | null
+  ) => {
+    if (!file || !workflow?.visit) return;
+    setUploadingPhoto(true);
+    setUploadProgressText(`Substituindo foto (${ev.area || stage}) e removendo a anterior do Telegram...`);
+    try {
+      const fd = new FormData();
+      fd.append('photo', file);
+      fd.append('stage', stage);
+      fd.append('area', ev.area || 'Gôndola Principal');
+      fd.append('replace_evidence_id', String(ev.id));
+      fd.append(
+        'caption',
+        stage === 'SELFIE_ENTRADA'
+          ? 'Selfie em frente ao estabelecimento (substituída)'
+          : `Evidência ${stage} - ${ev.area || 'Gôndola'} (substituída)`
+      );
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
+      await refreshWorkflow(workflow.visit.id);
+      notify(
+        'ok',
+        res?.replaced_telegram_deleted
+          ? 'Foto substituída! A foto errada foi apagada automaticamente do Telegram e a nova foi enviada em HD.'
+          : 'Foto substituída e enviada em HD ao Telegram!'
+      );
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao substituir foto.');
+    } finally {
+      setUploadingPhoto(false);
+      setUploadProgressText('');
     }
   };
 
@@ -787,24 +850,15 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                 </div>
 
                 <PhotoInput
-                  label="Tirar Selfie em frente ao estabelecimento"
-                  file={selfieFile}
-                  onFileSelect={setSelfieFile}
+                  label="Tirar Selfie em frente ao estabelecimento (Envio imediato)"
+                  onFilesSelect={(files) => void handleAutoUploadEvidences('SELFIE_ENTRADA', files, 'Fachada / Entrada do Estabelecimento')}
                   facingMode="user"
                   cameraOnly
+                  autoClear
+                  busy={uploadingPhoto}
+                  busyText={uploadProgressText || 'Enviando selfie em HD...'}
                   large
                 />
-
-                {selfieFile && (
-                  <button
-                    disabled={uploadingPhoto}
-                    onClick={() => handleUploadEvidence('SELFIE_ENTRADA', selfieFile, 'Fachada / Entrada do Estabelecimento')}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    {uploadingPhoto ? 'Salvando selfie...' : 'Salvar Selfie na Entrada'}
-                  </button>
-                )}
 
                 {selfiePhotos.length > 0 && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
@@ -812,15 +866,38 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                       <div key={ev.id} className="p-3 rounded-xl border border-emerald-200 bg-white flex gap-3 items-center">
                         <img src={ev.photo_url} alt="Selfie na entrada" className="w-20 h-20 object-cover rounded-lg border" />
                         <div className="flex-1 min-w-0 text-xs">
-                          <div className="font-bold text-slate-900">Selfie na Entrada</div>
+                          <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                            <span>Selfie na Entrada</span>
+                            {ev.is_panoramic && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-extrabold">
+                                Panorâmica
+                              </span>
+                            )}
+                          </div>
                           <div className="text-slate-500">{ev.captured_at}</div>
-                          <button
-                            type="button"
-                            onClick={() => handleRetakeEvidence(ev.id)}
-                            className="mt-1.5 inline-flex items-center gap-1 text-amber-700 font-bold hover:underline"
-                          >
-                            <RotateCcw className="w-3 h-3" /> Refazer
-                          </button>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                            <label className="inline-flex items-center gap-1 text-amber-700 font-bold hover:underline cursor-pointer">
+                              <RotateCcw className="w-3 h-3" /> Substituir
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/*"
+                                capture="user"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] || null;
+                                  e.target.value = '';
+                                  void handleReplaceEvidence('SELFIE_ENTRADA', ev, f);
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleRetakeEvidence(ev.id)}
+                              className="inline-flex items-center gap-1 text-red-600 font-bold hover:underline"
+                            >
+                              <Trash2 className="w-3 h-3" /> Apagar
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -829,38 +906,51 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <div className="text-xs font-extrabold text-slate-800 uppercase">
-                  2. Fotografia Inicial da Gôndola / Área (Obrigatória)
+                <div>
+                  <div className="text-xs font-extrabold text-slate-800 uppercase">
+                    2. Fotografias Iniciais — Envio Automático em HD ao Telegram (Obrigatória)
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Selecione o tipo/área abaixo e tire ou escolha 1 ou várias fotos — elas recebem marca d&apos;água discreta (loja + área + data/hora) e vão direto para o Telegram na hora.
+                  </p>
                 </div>
-                <label className="block text-xs font-bold text-slate-700">Área Fotografada</label>
-                <select
-                  value={initialArea}
-                  onChange={(e) => setInitialArea(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white font-medium"
-                >
+                <div className="flex flex-wrap gap-1.5">
                   {AREAS.map((a) => (
-                    <option key={a} value={a}>{a}</option>
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setInitialArea(a)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                        initialArea === a
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-blue-50'
+                      }`}
+                    >
+                      {a}
+                    </button>
                   ))}
-                </select>
+                </div>
 
-                <PhotoInput
-                  label="Capturar Fotografia Inicial com a Câmera"
-                  file={initialFile}
-                  onFileSelect={setInitialFile}
-                  cameraOnly
-                  large
-                />
-
-                {initialFile && (
-                  <button
-                    disabled={uploadingPhoto}
-                    onClick={() => handleUploadEvidence('INICIAL', initialFile, initialArea)}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    {uploadingPhoto ? 'Salvando evidência...' : 'Salvar Fotografia Inicial'}
-                  </button>
-                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <PhotoInput
+                    label={`Tirar Foto (${initialArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('INICIAL', files, initialArea)}
+                    cameraOnly
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando foto em HD...'}
+                    large
+                  />
+                  <PhotoInput
+                    label={`Selecionar Várias Fotos (${initialArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('INICIAL', files, initialArea)}
+                    multiple
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando fotos em HD...'}
+                    large
+                  />
+                </div>
               </div>
 
               {/* Fotos Iniciais Registradas */}
@@ -872,15 +962,37 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                       <div key={ev.id} className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 flex gap-3 items-center">
                         <img src={ev.photo_url} alt={ev.area} className="w-20 h-20 object-cover rounded-lg border" />
                         <div className="flex-1 min-w-0 text-xs">
-                          <div className="font-bold text-slate-900">{ev.area}</div>
+                          <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                            <span>{ev.area}</span>
+                            {ev.is_panoramic && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-extrabold">
+                                Panorâmica
+                              </span>
+                            )}
+                          </div>
                           <div className="text-slate-500">{ev.captured_at}</div>
-                          <button
-                            type="button"
-                            onClick={() => handleRetakeEvidence(ev.id)}
-                            className="mt-1.5 inline-flex items-center gap-1 text-amber-700 font-bold hover:underline"
-                          >
-                            <RotateCcw className="w-3 h-3" /> Refazer
-                          </button>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                            <label className="inline-flex items-center gap-1 text-amber-700 font-bold hover:underline cursor-pointer">
+                              <RotateCcw className="w-3 h-3" /> Substituir
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] || null;
+                                  e.target.value = '';
+                                  void handleReplaceEvidence('INICIAL', ev, f);
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleRetakeEvidence(ev.id)}
+                              className="inline-flex items-center gap-1 text-red-600 font-bold hover:underline"
+                            >
+                              <Trash2 className="w-3 h-3" /> Apagar
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -890,39 +1002,80 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
               {/* Fotos Complementares de Diferentes Áreas */}
               <div className="p-4 rounded-2xl border border-dashed border-slate-300 space-y-3">
-                <div className="text-xs font-bold text-slate-700">Fotografias Complementares (Opcional — Outras áreas da loja)</div>
+                <div className="text-xs font-bold text-slate-700">Fotografias Complementares (Envio imediato — Outras áreas da loja)</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {AREAS.map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setCompArea(a)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition border ${
+                        compArea === a
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {a}
+                    </button>
+                  ))}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <select
-                    value={compArea}
-                    onChange={(e) => setCompArea(e.target.value)}
-                    className="px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white"
-                  >
-                    {AREAS.map((a) => (
-                      <option key={a} value={a}>{a}</option>
-                    ))}
-                  </select>
                   <PhotoInput
-                    label="Adicionar Foto Complementar"
-                    file={compFile}
-                    onFileSelect={setCompFile}
+                    label={`Câmera (${compArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('COMPLEMENTAR', files, compArea)}
                     cameraOnly
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando...'}
+                  />
+                  <PhotoInput
+                    label={`Várias Fotos (${compArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('COMPLEMENTAR', files, compArea)}
+                    multiple
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando...'}
                   />
                 </div>
-                {compFile && (
-                  <button
-                    disabled={uploadingPhoto}
-                    onClick={() => handleUploadEvidence('COMPLEMENTAR', compFile, compArea)}
-                    className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-xl"
-                  >
-                    Salvar Foto Complementar
-                  </button>
-                )}
                 {complementaryPhotos.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                     {complementaryPhotos.map((c: any) => (
-                      <span key={c.id} className="px-2.5 py-1 rounded-lg bg-slate-100 text-xs font-medium text-slate-700">
-                        {c.area} ({c.captured_at})
-                      </span>
+                      <div key={c.id} className="p-2.5 rounded-xl border border-slate-200 bg-white flex gap-2.5 items-center">
+                        <img src={c.photo_url} alt={c.area} className="w-16 h-16 object-cover rounded-lg border" />
+                        <div className="flex-1 min-w-0 text-xs">
+                          <div className="font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                            <span>{c.area}</span>
+                            {c.is_panoramic && (
+                              <span className="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-extrabold">
+                                Panorâmica
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500">{c.captured_at}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-3">
+                            <label className="inline-flex items-center gap-1 text-amber-700 font-bold hover:underline cursor-pointer">
+                              <RotateCcw className="w-3 h-3" /> Substituir
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] || null;
+                                  e.target.value = '';
+                                  void handleReplaceEvidence('COMPLEMENTAR', c, f);
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleRetakeEvidence(c.id)}
+                              className="inline-flex items-center gap-1 text-red-600 font-bold hover:underline"
+                            >
+                              <Trash2 className="w-3 h-3" /> Apagar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -1528,33 +1681,48 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <label className="block text-xs font-bold text-slate-700">Área Final Fotografada</label>
-                <select
-                  value={finalArea}
-                  onChange={(e) => setFinalArea(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm bg-white font-medium"
-                >
+                <div>
+                  <label className="block text-xs font-extrabold text-slate-800 uppercase">Área Final Fotografada — Envio Automático em HD ao Telegram</label>
+                  <p className="text-[11px] text-slate-500">
+                    Escolha a área e capture/selecione 1 ou várias fotos — cada imagem recebe marca d&apos;água discreta (loja + área + data/hora) e é enviada na hora.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
                   {AREAS.map((a) => (
-                    <option key={a} value={a}>{a}</option>
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setFinalArea(a)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                        finalArea === a
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-emerald-50'
+                      }`}
+                    >
+                      {a}
+                    </button>
                   ))}
-                </select>
-                <PhotoInput
-                  label="Capturar Fotografia Final com a Câmera"
-                  file={finalFile}
-                  onFileSelect={setFinalFile}
-                  cameraOnly
-                  large
-                />
-                {finalFile && (
-                  <button
-                    disabled={uploadingPhoto}
-                    onClick={() => handleUploadEvidence('FINAL', finalFile, finalArea)}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-sm"
-                  >
-                    <Camera className="w-4 h-4" />
-                    {uploadingPhoto ? 'Salvando foto final...' : 'Salvar Fotografia Final'}
-                  </button>
-                )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <PhotoInput
+                    label={`Tirar Foto Final (${finalArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('FINAL', files, finalArea)}
+                    cameraOnly
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando foto final em HD...'}
+                    large
+                  />
+                  <PhotoInput
+                    label={`Selecionar Várias Finais (${finalArea})`}
+                    onFilesSelect={(files) => void handleAutoUploadEvidences('FINAL', files, finalArea)}
+                    multiple
+                    autoClear
+                    busy={uploadingPhoto}
+                    busyText={uploadProgressText || 'Enviando fotos finais em HD...'}
+                    large
+                  />
+                </div>
               </div>
 
               {/* Comparação Lado a Lado */}
@@ -1587,15 +1755,37 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                           pair.after.map((p: any) => (
                             <div key={p.id} className="space-y-1">
                               <img src={p.photo_url} alt="Depois" className="w-full h-44 object-cover rounded-xl border border-emerald-300" />
-                              <div className="text-[11px] text-slate-500 flex justify-between">
-                                <span>{p.captured_at}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleRetakeEvidence(p.id)}
-                                  className="text-amber-700 font-bold hover:underline"
-                                >
-                                  Refazer
-                                </button>
+                              <div className="text-[11px] text-slate-500 flex flex-wrap items-center justify-between gap-2">
+                                <span className="flex items-center gap-1.5">
+                                  <span>{p.captured_at}</span>
+                                  {p.is_panoramic && (
+                                    <span className="px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-extrabold">
+                                      Panorâmica
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="flex items-center gap-3">
+                                  <label className="inline-flex items-center gap-1 text-amber-700 font-bold hover:underline cursor-pointer">
+                                    <RotateCcw className="w-3 h-3" /> Substituir
+                                    <input
+                                      type="file"
+                                      accept="image/jpeg,image/png,image/webp,image/*"
+                                      className="hidden"
+                                      onChange={(e) => {
+                                        const f = e.target.files?.[0] || null;
+                                        e.target.value = '';
+                                        void handleReplaceEvidence('FINAL', p, f);
+                                      }}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRetakeEvidence(p.id)}
+                                    className="inline-flex items-center gap-1 text-red-600 font-bold hover:underline"
+                                  >
+                                    <Trash2 className="w-3 h-3" /> Apagar
+                                  </button>
+                                </span>
                               </div>
                             </div>
                           ))

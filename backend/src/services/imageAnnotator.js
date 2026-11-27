@@ -9,6 +9,13 @@ const CATEGORY_STYLE = {
   opportunity: { color: '#9333ea', label: 'Oportunidade' },
 };
 
+const STAGE_LABELS = {
+  SELFIE_ENTRADA: 'Selfie Entrada',
+  INICIAL: 'Foto Inicial (Antes)',
+  COMPLEMENTAR: 'Foto Complementar',
+  FINAL: 'Foto Final (Depois)',
+};
+
 function escapeXml(str) {
   return String(str || '')
     .replace(/&/g, '&amp;')
@@ -16,6 +23,19 @@ function escapeXml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function formatBrazilDateTime(input) {
+  const date = input ? new Date(input) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return safeDate.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function normalizeCategory(raw) {
@@ -29,6 +49,89 @@ function normalizeCategory(raw) {
 
 function clamp(val, min, max) {
   return Math.max(min, Math.min(max, val));
+}
+
+function detectPanoramic(width, height) {
+  return Number(width) > 0 && Number(height) > 0 && Number(width) / Number(height) >= 2.0;
+}
+
+/**
+ * Aplica uma marca d'água discreta de auditoria no canto inferior direito da foto em HD:
+ * Loja auditada • Área/Tipo da foto • Data e hora (Brasília).
+ * Suporta imagens normais e panorâmicas preservando 100% da resolução original (HD) e orientação EXIF.
+ */
+async function applyAuditWatermark({
+  imagePath,
+  outputDir,
+  storeName,
+  area,
+  stage,
+  promoterName,
+  capturedAt,
+}) {
+  if (!imagePath || !fs.existsSync(imagePath)) return null;
+
+  const baseBuffer = await sharp(imagePath).rotate().toBuffer();
+  const meta = await sharp(baseBuffer).metadata();
+  const width = meta.width || 1280;
+  const height = meta.height || 720;
+  const isPanoramic = detectPanoramic(width, height);
+
+  const scale = isPanoramic
+    ? Math.max(0.65, Math.min(1.6, height / 900))
+    : Math.max(0.65, Math.min(2.0, width / 1400));
+  const fontPrimary = Math.max(13, Math.round(20 * scale));
+  const fontSecondary = Math.max(11, Math.round(16 * scale));
+  const padX = Math.round(14 * scale);
+  const padY = Math.round(10 * scale);
+  const margin = Math.round(16 * scale);
+
+  const dateLabel = formatBrazilDateTime(capturedAt);
+  const stageLabel = stage ? STAGE_LABELS[stage] || stage : '';
+  const areaLabel = area
+    ? `${area}${isPanoramic && !String(area).toLowerCase().includes('panorâm') ? ' (Panorâmica)' : ''}`
+    : isPanoramic
+    ? 'Panorâmica'
+    : '';
+  const areaPart = [areaLabel, stageLabel].filter(Boolean).join(' • ');
+  const line1 = `${storeName || 'Loja Auditada'}${areaPart ? `  •  ${areaPart}` : ''}`.slice(0, 96);
+  const line2 = `${dateLabel}${promoterName ? `  •  ${promoterName}` : ''}  •  MERCHANDISING PRO`.slice(0, 96);
+
+  const estW1 = Math.round(line1.length * fontPrimary * 0.56);
+  const estW2 = Math.round(line2.length * fontSecondary * 0.56);
+  const boxW = Math.min(width - margin * 2, Math.max(estW1, estW2) + padX * 2);
+  const boxH = Math.round(fontPrimary * 1.35 + fontSecondary * 1.35 + padY * 1.9);
+  const boxX = Math.max(margin, width - boxW - margin);
+  const boxY = Math.max(margin, height - boxH - margin);
+  const radius = Math.round(10 * scale);
+
+  const svgOverlay = Buffer.from(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect x="${boxX}" y="${boxY}" width="${boxW}" height="${boxH}" rx="${radius}" fill="#0f172a" fill-opacity="0.62" stroke="#ffffff" stroke-opacity="0.22" stroke-width="${Math.max(1, Math.round(1.5 * scale))}"/>
+      <text x="${boxX + padX}" y="${boxY + padY + fontPrimary}" fill="#ffffff" fill-opacity="0.95" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" font-size="${fontPrimary}" font-weight="700">${escapeXml(line1)}</text>
+      <text x="${boxX + padX}" y="${boxY + padY + Math.round(fontPrimary * 1.35) + fontSecondary}" fill="#cbd5e1" fill-opacity="0.92" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" font-size="${fontSecondary}" font-weight="500">${escapeXml(line2)}</text>
+    </svg>
+  `);
+
+  const baseName = path.basename(imagePath, path.extname(imagePath));
+  const filename = `wm-${baseName}.jpg`;
+  const targetDir = outputDir || path.dirname(imagePath);
+  const watermarkedPath = path.join(targetDir, filename);
+
+  await sharp(baseBuffer)
+    .composite([{ input: svgOverlay, top: 0, left: 0 }])
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toFile(watermarkedPath);
+
+  return {
+    watermarkedPath,
+    filename,
+    mimetype: 'image/jpeg',
+    width,
+    height,
+    isPanoramic,
+    watermarkText: `${line1} | ${line2}`,
+  };
 }
 
 /**
@@ -58,7 +161,6 @@ function normalizeAnnotations(rawList) {
 
     if ([ymin, xmin, ymax, xmax].some((n) => Number.isNaN(n))) continue;
 
-    // Detectar escala automática: 0..1 -> *1000; 0..100 -> *10; 0..1000 -> manter
     const maxCoord = Math.max(ymin, xmin, ymax, xmax);
     if (maxCoord <= 1.0) {
       ymin *= 1000;
@@ -72,7 +174,6 @@ function normalizeAnnotations(rawList) {
       xmax *= 10;
     }
 
-    // Garantir ordem correta caso o modelo inverta min/max
     if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
     if (xmin > xmax) [xmin, xmax] = [xmax, xmin];
 
@@ -95,18 +196,21 @@ function normalizeAnnotations(rawList) {
 }
 
 /**
- * Desenha as áreas demarcadas pela IA em alta definição sobre uma cópia da imagem original.
- * Preserva resolução original (HD) e corrige orientação EXIF automaticamente.
+ * Desenha as áreas demarcadas pela IA em alta definição sobre uma cópia da imagem original,
+ * incluindo a marca d'água discreta de data/hora, loja e área auditada.
  */
-async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, planogramScore, storeName }) {
+async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, planogramScore, storeName, area, capturedAt }) {
   if (!imagePath || !fs.existsSync(imagePath)) return null;
 
   const baseBuffer = await sharp(imagePath).rotate().toBuffer();
   const meta = await sharp(baseBuffer).metadata();
   const width = meta.width || 1280;
   const height = meta.height || 720;
+  const isPanoramic = detectPanoramic(width, height);
 
-  const scale = Math.max(0.75, Math.min(2.2, width / 1200));
+  const scale = isPanoramic
+    ? Math.max(0.7, Math.min(1.65, height / 850))
+    : Math.max(0.75, Math.min(2.2, width / 1200));
   const strokeW = Math.max(3, Math.round(5 * scale));
   const fontSize = Math.max(16, Math.round(24 * scale));
   const headerH = Math.max(44, Math.round(56 * scale));
@@ -114,16 +218,15 @@ async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, pl
   const padX = Math.round(14 * scale);
 
   const normalized = normalizeAnnotations(annotations);
+  const dateLabel = formatBrazilDateTime(capturedAt);
   const svgParts = [];
 
-  // Cabeçalho translúcido discreto
-  const headerText = `MERCHANDISING PRO IA • ${storeName ? `${storeName} • ` : ''}Planograma ${planogramScore ?? '-'}% • ${normalized.length} área(s) demarcada(s)`;
+  const headerText = `${storeName || 'PDV'}${area ? ` • ${area}` : ''}${isPanoramic ? ' • PANORÂMICA' : ''} • ${dateLabel} • Planograma ${planogramScore ?? '-'}% (${normalized.length} área(s))`;
   svgParts.push(`
-    <rect x="0" y="0" width="${width}" height="${headerH}" fill="#0f172a" fill-opacity="0.78"/>
-    <text x="${padX}" y="${Math.round(headerH * 0.66)}" fill="#ffffff" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" font-size="${Math.round(fontSize * 0.85)}" font-weight="700">${escapeXml(headerText.slice(0, 95))}</text>
+    <rect x="0" y="0" width="${width}" height="${headerH}" fill="#0f172a" fill-opacity="0.72"/>
+    <text x="${padX}" y="${Math.round(headerH * 0.66)}" fill="#ffffff" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" font-size="${Math.round(fontSize * 0.78)}" font-weight="700">${escapeXml(headerText.slice(0, 105))}</text>
   `);
 
-  // Desenhar caixas demarcadas
   normalized.forEach((ann, idx) => {
     const [ymin, xmin, ymax, xmax] = ann.box_2d;
     const x = Math.round((xmin / 1000) * width);
@@ -153,7 +256,6 @@ async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, pl
     `);
   });
 
-  // Caso não haja caixas (ex.: modo heurístico), desenha moldura central indicativa
   if (normalized.length === 0) {
     const mx = Math.round(width * 0.12);
     const my = Math.round(height * 0.18);
@@ -166,10 +268,9 @@ async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, pl
     `);
   }
 
-  // Legenda no rodapé
   const legendY = height - footerH;
   svgParts.push(`
-    <rect x="0" y="${legendY}" width="${width}" height="${footerH}" fill="#0f172a" fill-opacity="0.78"/>
+    <rect x="0" y="${legendY}" width="${width}" height="${footerH}" fill="#0f172a" fill-opacity="0.72"/>
     <text x="${padX}" y="${legendY + Math.round(footerH * 0.65)}" fill="#e2e8f0" font-family="DejaVu Sans, Liberation Sans, Arial, sans-serif" font-size="${Math.round(fontSize * 0.72)}" font-weight="600">Legenda: [Vermelho] Ruptura  •  [Azul] Marca/Produto  •  [Amarelo] Exposição/Preço  •  [Roxo] Oportunidade</text>
   `);
 
@@ -193,12 +294,16 @@ async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, pl
     mimetype: 'image/jpeg',
     width,
     height,
+    isPanoramic,
     annotations: normalized,
   };
 }
 
 module.exports = {
+  applyAuditWatermark,
+  detectPanoramic,
   normalizeAnnotations,
   renderAnnotatedImage,
+  formatBrazilDateTime,
   CATEGORY_STYLE,
 };

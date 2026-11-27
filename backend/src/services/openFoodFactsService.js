@@ -86,7 +86,8 @@ async function pullPepsicoFromOpenFoodFacts() {
       seenEans.add(ean);
 
       const imageUrl = String(raw?.image_front_url || raw?.image_url || '').trim();
-      const unit = String(raw?.quantity || 'UN').trim() || 'UN';
+      const weight = String(raw?.quantity || '').trim();
+      const unit = 'UN';
       const categoryRaw = String(raw?.categories || '').split(',')[0].trim();
       const category = categoryRaw ? categoryRaw.replace(/^en:|^pt:/i, '') : 'PepsiCo';
 
@@ -100,6 +101,7 @@ async function pullPepsicoFromOpenFoodFacts() {
               brand_id: existing.brand_id ?? brandId,
               category: existing.category || category,
               unit: existing.unit || unit,
+              weight: existing.weight || weight,
               image_url: existing.image_url || imageUrl,
               active: 1,
               updated_at: nowStr(),
@@ -117,6 +119,7 @@ async function pullPepsicoFromOpenFoodFacts() {
           brand_id: brandId,
           category,
           unit,
+          weight,
           system_price: 0,
           image_url: imageUrl,
           min_stock: 10,

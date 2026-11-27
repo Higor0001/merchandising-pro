@@ -5,11 +5,24 @@ import { PhotoInput } from '../components/PhotoInput';
 import { ShelfAnnotationEditor, type ShelfAnnotation } from '../components/ShelfAnnotationEditor';
 import { useToast } from '../context/ToastContext';
 
+const AI_AREAS = [
+  'Auto',
+  'Corredor Principal',
+  'Gôndola Principal',
+  'Ponta de Gôndola',
+  'Ilha Promocional',
+  'Checkout',
+  'Ponto Extra',
+  'Display',
+  'Estoque/Retaguarda',
+];
+
 export const AIPage: React.FC = () => {
   const { toast } = useToast();
   const [analyses, setAnalyses] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
   const [storeId, setStoreId] = useState('');
+  const [area, setArea] = useState('Auto');
   const [notes, setNotes] = useState('');
   const [photo, setPhoto] = useState<File | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -37,6 +50,7 @@ export const AIPage: React.FC = () => {
     try {
       const fd = new FormData();
       fd.append('store_id', storeId);
+      fd.append('area', area);
       fd.append('notes', notes);
       if (photo) fd.append('photo', photo);
       const res = await apiFetch<any>('/ai/analyze-shelf', { method: 'POST', body: fd });
@@ -103,12 +117,17 @@ export const AIPage: React.FC = () => {
 
   const rejectAnalysis = async (id: number) => {
     try {
-      await apiFetch(`/ai/analyses/${id}/validate`, {
+      const res = await apiFetch<any>(`/ai/analyses/${id}/validate`, {
         method: 'PATCH',
         body: JSON.stringify({ human_validation: 'Rejeitado', human_notes: 'Análise rejeitada pelo operador' }),
       });
       if (editingId === id) setEditingId(null);
-      toast('info', 'Análise marcada como Rejeitada.');
+      toast(
+        'info',
+        res?.telegram_deleted
+          ? 'Análise rejeitada e imagens removidas automaticamente do Telegram!'
+          : 'Análise marcada como Rejeitada.'
+      );
       await load();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao atualizar validação.');
@@ -153,11 +172,16 @@ export const AIPage: React.FC = () => {
           <Sparkles className="w-4 h-4 text-indigo-600" /> Nova Análise Inteligente de Gôndola
         </div>
         <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 text-xs text-blue-900">
-          <b>Dica para máxima precisão:</b> tire a foto de frente para a gôndola (reta, bem iluminada e sem tremor). Depois da análise automática, revise as caixas na imagem antes de enviar ao Telegram.
+          <b>Dica para máxima precisão:</b> tire a foto de frente para a gôndola (suporta <b>fotos panorâmicas</b> de corredor completo em alta resolução). Depois da análise automática, revise as caixas na imagem antes de enviar ao Telegram.
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className="px-3 py-2 border rounded-xl text-sm">
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select value={area} onChange={(e) => setArea(e.target.value)} className="px-3 py-2 border rounded-xl text-sm bg-white">
+            {AI_AREAS.map((a) => (
+              <option key={a} value={a}>{a === 'Auto' ? 'Área: Identificar automaticamente (IA)' : a}</option>
+            ))}
           </select>
           <input placeholder="Contexto adicional (opcional, ex: corredor de salgadinhos)" value={notes} onChange={(e) => setNotes(e.target.value)} className="px-3 py-2 border rounded-xl text-sm" />
         </div>
@@ -193,7 +217,19 @@ export const AIPage: React.FC = () => {
             <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
                 <div>
-                  <div className="font-bold text-slate-900">{a.store_name || 'PDV'} — Análise #{a.id}</div>
+                  <div className="font-bold text-slate-900 flex flex-wrap items-center gap-2">
+                    <span>{a.store_name || 'PDV'} — Análise #{a.id}</span>
+                    {a.area && (
+                      <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[11px] font-bold">
+                        {a.area}
+                      </span>
+                    )}
+                    {a.is_panoramic && (
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[11px] font-extrabold">
+                        Panorâmica
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-500">{a.created_at} • Planograma: <b>{a.planogram_score}%</b></div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

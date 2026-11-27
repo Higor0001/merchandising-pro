@@ -6,8 +6,8 @@ const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
-const { normalizeAnnotations, renderAnnotatedImage } = require('../services/imageAnnotator');
-const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
+const { applyAuditWatermark, normalizeAnnotations, renderAnnotatedImage } = require('../services/imageAnnotator');
+const { sendPhotoToTelegram, sendMessageToTelegram, deleteTelegramMessage } = require('../services/telegramService');
 
 /**
  * Baixa/recupera a imagem original em HD (Cloudinary HTTPS ou GridFS /uploads/) para um arquivo temporário local
@@ -86,16 +86,43 @@ router.get('/prices', async (req, res, next) => {
 });
 
 router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
+  let wmPath = null;
   try {
     const { visit_id, store_id, product_id, gondola_price, promo_price, has_price_tag, competitor_name, competitor_price, notes } = req.body || {};
     if (!store_id || !product_id) return res.status(400).json({ error: 'Loja e produto são obrigatórios.' });
 
-    const product = await (await col('products')).findOne({ id: Number(product_id) });
+    const [product, store] = await Promise.all([
+      (await col('products')).findOne({ id: Number(product_id) }),
+      (await col('stores')).findOne({ id: Number(store_id) }),
+    ]);
+    const capturedAt = nowStr();
     const sysPrice = product ? Number(product.system_price) : 0;
     const gPrice = gondola_price !== '' && gondola_price !== undefined && gondola_price !== null ? Number(gondola_price) : null;
     const tagPresent = has_price_tag === 'false' || has_price_tag === false || has_price_tag === '0' ? 0 : 1;
     const divergent = tagPresent === 0 || (gPrice !== null && Math.abs(gPrice - sysPrice) > 0.01) ? 1 : 0;
-    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
+
+    let persistFile = req.file;
+    let tgPath = req.file ? path.join(uploadDir, req.file.filename) : null;
+    if (req.file) {
+      try {
+        const wm = await applyAuditWatermark({
+          imagePath: req.file.path,
+          outputDir: uploadDir,
+          storeName: store?.name,
+          area: `Precificação (${product?.name || `SKU #${product_id}`})`,
+          promoterName: req.user?.name,
+          capturedAt,
+        });
+        if (wm?.watermarkedPath) {
+          wmPath = wm.watermarkedPath;
+          persistFile = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+          tgPath = wm.watermarkedPath;
+        }
+      } catch {
+        // fallback original
+      }
+    }
+    const photoUrl = persistFile ? await saveFileToGridFS(persistFile) : '';
 
     const id = await nextId('price_checks');
     await (await col('price_checks')).insertOne({
@@ -113,7 +140,7 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
       competitor_price: competitor_price ? Number(competitor_price) : null,
       photo_url: photoUrl,
       notes: notes || '',
-      created_at: nowStr(),
+      created_at: capturedAt,
     });
 
     if (tagPresent === 0) {
@@ -129,14 +156,13 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
         photo_url: photoUrl,
         status: 'Aberta',
         resolved_at: null,
-        created_at: nowStr(),
+        created_at: capturedAt,
       });
     }
 
-    if (req.file) {
-      const store = await (await col('stores')).findOne({ id: Number(store_id) });
+    if (tgPath) {
       await sendPhotoToTelegram({
-        filePath: path.join(uploadDir, req.file.filename),
+        filePath: tgPath,
         reason: 'Precificação / Conferência de Etiqueta',
         storeName: store?.name,
         promoterName: req.user?.name,
@@ -149,7 +175,7 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(wmPath)]);
   }
 });
 
@@ -350,12 +376,40 @@ router.post('/campaigns', authorize('admin', 'supervisor'), async (req, res, nex
 });
 
 router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
+  let wmPath = null;
   try {
     const cid = Number(req.params.id);
     const { store_id, visit_id, compliant, checklist_status, notes } = req.body || {};
     if (!store_id) return res.status(400).json({ error: 'Loja é obrigatória.' });
 
-    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
+    const [store, camp] = await Promise.all([
+      (await col('stores')).findOne({ id: Number(store_id) }),
+      (await col('campaigns')).findOne({ id: cid }),
+    ]);
+    const executedAt = nowStr();
+    let persistFile = req.file;
+    let tgPath = req.file ? path.join(uploadDir, req.file.filename) : null;
+    if (req.file) {
+      try {
+        const wm = await applyAuditWatermark({
+          imagePath: req.file.path,
+          outputDir: uploadDir,
+          storeName: store?.name,
+          area: `Campanha: ${camp?.title || `#${cid}`}`,
+          promoterName: req.user?.name,
+          capturedAt: executedAt,
+        });
+        if (wm?.watermarkedPath) {
+          wmPath = wm.watermarkedPath;
+          persistFile = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+          tgPath = wm.watermarkedPath;
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    const photoUrl = persistFile ? await saveFileToGridFS(persistFile) : '';
     const id = await nextId('campaign_executions');
     await (await col('campaign_executions')).insertOne({
       id,
@@ -367,14 +421,12 @@ router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecut
       compliant: compliant === 'false' || compliant === false ? 0 : 1,
       photo_url: photoUrl,
       notes: notes || '',
-      executed_at: nowStr(),
+      executed_at: executedAt,
     });
 
-    if (req.file) {
-      const store = await (await col('stores')).findOne({ id: Number(store_id) });
-      const camp = await (await col('campaigns')).findOne({ id: cid });
+    if (tgPath) {
       await sendPhotoToTelegram({
-        filePath: path.join(uploadDir, req.file.filename),
+        filePath: tgPath,
         reason: `Comprovação de Campanha (${camp?.title || `#${cid}`})`,
         storeName: store?.name,
         promoterName: req.user?.name,
@@ -387,7 +439,7 @@ router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecut
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(wmPath)]);
   }
 });
 
@@ -425,11 +477,36 @@ router.get('/occurrences', async (req, res, next) => {
 });
 
 router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegrity, async (req, res, next) => {
+  let wmPath = null;
   try {
     const { visit_id, store_id, product_id, type, priority, description } = req.body || {};
     if (!store_id || !type || !description) return res.status(400).json({ error: 'Loja, tipo e descrição são obrigatórios.' });
 
-    const photoUrl = req.file ? await saveFileToGridFS(req.file) : '';
+    const store = await (await col('stores')).findOne({ id: Number(store_id) });
+    const createdAt = nowStr();
+    let persistFile = req.file;
+    let tgPath = req.file ? path.join(uploadDir, req.file.filename) : null;
+    if (req.file) {
+      try {
+        const wm = await applyAuditWatermark({
+          imagePath: req.file.path,
+          outputDir: uploadDir,
+          storeName: store?.name,
+          area: `Ocorrência: ${type}`,
+          promoterName: req.user?.name,
+          capturedAt: createdAt,
+        });
+        if (wm?.watermarkedPath) {
+          wmPath = wm.watermarkedPath;
+          persistFile = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+          tgPath = wm.watermarkedPath;
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    const photoUrl = persistFile ? await saveFileToGridFS(persistFile) : '';
     const id = await nextId('occurrences');
     await (await col('occurrences')).insertOne({
       id,
@@ -443,13 +520,12 @@ router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegri
       photo_url: photoUrl,
       status: 'Aberta',
       resolved_at: null,
-      created_at: nowStr(),
+      created_at: createdAt,
     });
 
-    if (req.file) {
-      const store = await (await col('stores')).findOne({ id: Number(store_id) });
+    if (tgPath) {
       await sendPhotoToTelegram({
-        filePath: path.join(uploadDir, req.file.filename),
+        filePath: tgPath,
         reason: `Ocorrência: ${type} (Prioridade ${priority || 'Média'})`,
         storeName: store?.name,
         promoterName: req.user?.name,
@@ -462,7 +538,7 @@ router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegri
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(wmPath)]);
   }
 });
 
@@ -501,15 +577,42 @@ router.get('/ai/analyses', async (_req, res, next) => {
 
 router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) => {
   let annotatedPath = null;
+  let watermarkedOrigPath = null;
   try {
-    const { store_id, visit_id, notes } = req.body || {};
+    const { store_id, visit_id, notes, area: requestedArea } = req.body || {};
     const imagePath = req.file ? path.join(uploadDir, req.file.filename) : null;
     const store = store_id ? await (await col('stores')).findOne({ id: Number(store_id) }) : null;
+    const capturedAt = nowStr();
 
-    const [imageUrl, result] = await Promise.all([
-      req.file ? saveFileToGridFS(req.file) : Promise.resolve(''),
-      analyzeShelfImage({ storeId: store_id, visitId: visit_id, imagePath, notes }),
-    ]);
+    const result = await analyzeShelfImage({ storeId: store_id, visitId: visit_id, imagePath, notes });
+    const resolvedArea =
+      requestedArea && requestedArea !== 'Auto'
+        ? String(requestedArea).trim()
+        : result.detected_area || 'Gôndola Principal';
+
+    let imageUrl = '';
+    let isPanoramic = Boolean(result.is_panoramic);
+    if (req.file && imagePath) {
+      let origToPersist = req.file;
+      try {
+        const wm = await applyAuditWatermark({
+          imagePath,
+          outputDir: uploadDir,
+          storeName: store?.name,
+          area: resolvedArea,
+          promoterName: req.user?.name,
+          capturedAt,
+        });
+        if (wm?.watermarkedPath) {
+          watermarkedOrigPath = wm.watermarkedPath;
+          origToPersist = { path: wm.watermarkedPath, filename: wm.filename, mimetype: wm.mimetype };
+          if (wm.isPanoramic) isPanoramic = true;
+        }
+      } catch {
+        // fallback original
+      }
+      imageUrl = await saveFileToGridFS(origToPersist);
+    }
 
     let annotatedImageUrl = '';
     let finalAnnotations = result.annotations || [];
@@ -521,10 +624,13 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
           outputDir: uploadDir,
           planogramScore: result.planogram_score,
           storeName: store?.name,
+          area: resolvedArea,
+          capturedAt,
         });
         if (rendered?.annotatedPath) {
           annotatedPath = rendered.annotatedPath;
           finalAnnotations = rendered.annotations;
+          if (rendered.isPanoramic) isPanoramic = true;
           annotatedImageUrl = await saveFileToGridFS({
             path: rendered.annotatedPath,
             filename: rendered.filename,
@@ -542,6 +648,8 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       visit_id: visit_id ? Number(visit_id) : null,
       store_id: store_id ? Number(store_id) : null,
       user_id: req.user.id,
+      area: resolvedArea,
+      is_panoramic: isPanoramic,
       image_url: imageUrl,
       annotated_image_url: annotatedImageUrl,
       annotations_json: JSON.stringify(finalAnnotations),
@@ -561,7 +669,10 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       human_notes: '',
       telegram_sent: false,
       telegram_sent_at: null,
-      created_at: nowStr(),
+      telegram_original_message_id: null,
+      telegram_annotated_message_id: null,
+      telegram_chat_id: null,
+      created_at: capturedAt,
     };
     await (await col('ai_analyses')).insertOne(doc);
 
@@ -570,13 +681,17 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       'AI_ANALYZE',
       'ai_analyses',
       id,
-      `Análise IA (${doc.analysis_mode}, 2-pass=${doc.self_verified}) ${finalAnnotations.length} demarcações — aguardando confirmação visual`
+      `Análise IA (${doc.analysis_mode}, área=${resolvedArea}) ${finalAnnotations.length} demarcações`
     );
     res.status(201).json(doc);
   } catch (err) {
     next(err);
   } finally {
-    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(annotatedPath)]);
+    await Promise.all([
+      cleanupUploadedFile(req.file),
+      cleanupUploadedFile(annotatedPath),
+      cleanupUploadedFile(watermarkedOrigPath),
+    ]);
   }
 });
 
@@ -611,6 +726,8 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
           outputDir: uploadDir,
           planogramScore: existing.planogram_score,
           storeName: store?.name,
+          area: existing.area || 'Gôndola Principal',
+          capturedAt: existing.created_at,
         });
         if (rendered?.annotatedPath) {
           tempAnnotPath = rendered.annotatedPath;
@@ -625,15 +742,33 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
 
     let telegramSent = Boolean(existing.telegram_sent);
     let telegramSentAt = existing.telegram_sent_at || null;
+    let telegramOrigMsgId = existing.telegram_original_message_id || null;
+    let telegramAnnotMsgId = existing.telegram_annotated_message_id || null;
+    let telegramChatId = existing.telegram_chat_id || null;
     let telegramResults = null;
 
     if (send_to_telegram && tempOrigPath) {
+      // Se já havia envio anterior no Telegram, apaga as mensagens antigas automaticamente ao substituir
+      if (existing.telegram_original_message_id) {
+        await deleteTelegramMessage({
+          messageId: existing.telegram_original_message_id,
+          chatId: existing.telegram_chat_id,
+        });
+      }
+      if (existing.telegram_annotated_message_id) {
+        await deleteTelegramMessage({
+          messageId: existing.telegram_annotated_message_id,
+          chatId: existing.telegram_chat_id,
+        });
+      }
+
+      const panoTag = existing.is_panoramic ? ' [Panorâmica]' : '';
       const r1 = await sendPhotoToTelegram({
         filePath: tempOrigPath,
-        reason: `Análise IA Validada 100% — Foto ORIGINAL (Score: ${existing.planogram_score}%)`,
+        reason: `Análise IA Validada 100%${panoTag} — Foto ORIGINAL (Score: ${existing.planogram_score}%)`,
         storeName: store?.name,
         promoterName: req.user?.name,
-        details: `${existing.auto_report}${human_notes ? ` | Nota: ${human_notes}` : ''}`,
+        details: `${existing.area ? `[${existing.area}] ` : ''}${existing.auto_report}${human_notes ? ` | Nota: ${human_notes}` : ''}`,
       });
       let r2 = { sent: false };
       if (tempAnnotPath) {
@@ -642,16 +777,19 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
           : 'Área geral de gôndola destacada';
         r2 = await sendPhotoToTelegram({
           filePath: tempAnnotPath,
-          reason: `Análise IA Validada 100% — Foto DEMARCADA (${finalAnnotations.length} área(s))`,
+          reason: `Análise IA Validada 100%${panoTag} — Foto DEMARCADA (${finalAnnotations.length} área(s))`,
           storeName: store?.name,
           promoterName: req.user?.name,
-          details: `Marcações validadas: ${legend}`,
+          details: `${existing.area ? `[${existing.area}] ` : ''}Marcações validadas: ${legend}`,
         });
       }
       telegramResults = { original: r1, annotated: r2 };
       if (r1.sent || r2.sent) {
         telegramSent = true;
         telegramSentAt = nowStr();
+        telegramOrigMsgId = r1?.message_id || null;
+        telegramAnnotMsgId = r2?.message_id || null;
+        telegramChatId = r1?.chat_id || r2?.chat_id || null;
       }
     }
 
@@ -664,6 +802,9 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
       verified_at: nowStr(),
       telegram_sent: telegramSent,
       telegram_sent_at: telegramSentAt,
+      telegram_original_message_id: telegramOrigMsgId,
+      telegram_annotated_message_id: telegramAnnotMsgId,
+      telegram_chat_id: telegramChatId,
     };
 
     await aiCol.updateOne({ id: aid }, { $set: updatedFields });
@@ -689,12 +830,45 @@ router.patch('/ai/analyses/:id/validate', async (req, res, next) => {
     const aid = Number(req.params.id);
     const { human_validation, human_notes } = req.body || {};
     const aiCol = await col('ai_analyses');
-    await aiCol.updateOne(
-      { id: aid },
-      { $set: { human_validation: human_validation || 'Confirmado', human_notes: human_notes || '' } }
+    const existing = await aiCol.findOne({ id: aid });
+    if (!existing) return res.status(404).json({ error: 'Análise não encontrada.' });
+
+    const updateSet = {
+      human_validation: human_validation || 'Confirmado',
+      human_notes: human_notes || '',
+    };
+
+    let telegramDeleted = false;
+    if (updateSet.human_validation === 'Rejeitado') {
+      if (existing.telegram_original_message_id) {
+        const d1 = await deleteTelegramMessage({
+          messageId: existing.telegram_original_message_id,
+          chatId: existing.telegram_chat_id,
+        });
+        if (d1?.deleted) telegramDeleted = true;
+      }
+      if (existing.telegram_annotated_message_id) {
+        const d2 = await deleteTelegramMessage({
+          messageId: existing.telegram_annotated_message_id,
+          chatId: existing.telegram_chat_id,
+        });
+        if (d2?.deleted) telegramDeleted = true;
+      }
+      updateSet.telegram_sent = false;
+      updateSet.telegram_original_message_id = null;
+      updateSet.telegram_annotated_message_id = null;
+    }
+
+    await aiCol.updateOne({ id: aid }, { $set: updateSet });
+    await logAudit(
+      req.user,
+      'AI_VALIDATE',
+      'ai_analyses',
+      aid,
+      `Validação humana: ${human_validation}${telegramDeleted ? ' | TG_DELETED=true' : ''}`
     );
-    await logAudit(req.user, 'AI_VALIDATE', 'ai_analyses', aid, `Validação humana: ${human_validation}`);
-    res.json(await aiCol.findOne({ id: aid }, { projection: { _id: 0 } }));
+    const updated = await aiCol.findOne({ id: aid }, { projection: { _id: 0 } });
+    res.json({ ...updated, telegram_deleted: telegramDeleted });
   } catch (err) { next(err); }
 });
 

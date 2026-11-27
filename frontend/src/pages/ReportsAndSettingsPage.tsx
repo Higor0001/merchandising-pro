@@ -34,7 +34,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
   const [endDate, setEndDate] = useState('');
 
   const [newBrand, setNewBrand] = useState({ name: '', is_own: true });
-  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '', category: 'Salgadinhos', system_price: '' });
+  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', weight: '', brand_id: '', category: 'SNACKS & SALGADINHOS', system_price: '' });
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
 
   // SI5 Global API state
@@ -395,7 +395,7 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
                     system_price: Number(newProd.system_price || 0),
                   }),
                 });
-                setNewProd((prev) => ({ sku: '', ean: '', name: '', brand_id: prev.brand_id, category: 'Salgadinhos', system_price: '' }));
+                setNewProd((prev) => ({ sku: '', ean: '', name: '', weight: '', brand_id: prev.brand_id, category: 'SNACKS & SALGADINHOS', system_price: '' }));
                 toast('ok', 'Produto cadastrado no catálogo!');
                 void loadConfig();
               } catch (err: any) {
@@ -407,12 +407,13 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
             <input required placeholder="SKU" value={newProd.sku} onChange={(e) => setNewProd({ ...newProd, sku: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <input required placeholder="EAN / Cód. Barras" value={newProd.ean} onChange={(e) => setNewProd({ ...newProd, ean: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <input required placeholder="Nome do Produto" value={newProd.name} onChange={(e) => setNewProd({ ...newProd, name: e.target.value })} className="col-span-2 px-3 py-2 border rounded-xl text-xs" />
+            <input placeholder="Gramatura (ex: 140 g, 350 ml, 1,5 L)" value={newProd.weight} onChange={(e) => setNewProd({ ...newProd, weight: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <select value={newProd.brand_id} onChange={(e) => setNewProd({ ...newProd, brand_id: e.target.value })} className="px-3 py-2 border rounded-xl text-xs bg-white">
               <option value="">Sem marca</option>
               {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
             <input required placeholder="Categoria" value={newProd.category} onChange={(e) => setNewProd({ ...newProd, category: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
-            <input type="number" step="0.01" placeholder="Preço Sistema" value={newProd.system_price} onChange={(e) => setNewProd({ ...newProd, system_price: e.target.value })} className="col-span-2 px-3 py-2 border rounded-xl text-xs" />
+            <input type="number" step="0.01" placeholder="Preço Sistema" value={newProd.system_price} onChange={(e) => setNewProd({ ...newProd, system_price: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <button type="submit" className="col-span-2 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold">Cadastrar Produto ({products.length} ativos)</button>
           </form>
         </div>

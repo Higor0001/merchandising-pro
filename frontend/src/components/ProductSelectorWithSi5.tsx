@@ -37,6 +37,7 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
     return products.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
+        (p.weight || '').toLowerCase().includes(q) ||
         (p.ean || '').toLowerCase().includes(q) ||
         (p.sku || '').toLowerCase().includes(q) ||
         (p.brand_name || '').toLowerCase().includes(q) ||
@@ -82,7 +83,7 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
             type="text"
             value={localFilter}
             onChange={(e) => setLocalFilter(e.target.value)}
-            placeholder={`Pesquisar entre ${products.length} produtos salvos (nome, EAN, marca)...`}
+            placeholder={`Pesquisar entre ${products.length} produtos salvos (nome, gramatura, EAN, marca)...`}
             className="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-xl text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -111,7 +112,9 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
         )}
         {filteredProducts.map((p) => (
           <option key={p.id} value={p.id}>
-            {p.name} {p.ean && p.ean !== 'A CONFERIR' ? `• EAN ${p.ean}` : `(${p.sku})`}
+            {p.name}
+            {p.weight && !p.name.toLowerCase().includes(p.weight.toLowerCase().replace(/\s+/g, '')) ? ` (${p.weight})` : ''}{' '}
+            {p.ean && p.ean !== 'A CONFERIR' ? `• EAN ${p.ean}` : `(${p.sku})`}
           </option>
         ))}
       </select>
@@ -160,6 +163,11 @@ export const ProductSelectorWithSi5: React.FC<ProductSelectorWithSi5Props> = ({
             <div className="font-bold text-slate-900 truncate">{selectedProduct.name}</div>
             <div className="text-slate-600 flex flex-wrap gap-x-3">
               <span>EAN: <b>{selectedProduct.ean}</b></span>
+              {selectedProduct.weight && (
+                <span className="px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-bold">
+                  {selectedProduct.weight}
+                </span>
+              )}
               {selectedProduct.brand_name && <span>Marca: <b>{selectedProduct.brand_name}</b></span>}
               {selectedProduct.category && <span>Cat: {selectedProduct.category}</span>}
               {selectedProduct.unit && <span>Emb: {selectedProduct.unit}</span>}
