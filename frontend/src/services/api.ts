@@ -12,6 +12,8 @@ import {
 export type { OfflineFormFile, OfflineQueueItem };
 
 const PERMANENT_HTTP_ERRORS = new Set([400, 403, 404, 409, 422]);
+const EMBEDDED_PROVISIONAL_CERT_SERIAL = 'MPRO-CERT-PROV-2026-HIGOR-CI';
+const EMBEDDED_PROVISIONAL_CERT_SIG = '8EC3C9B7D986FE5EC7404711F5333EA6FA6A776E21D5F0B8498DB051ED505FA8';
 const memoryApiCache = new Map<string, any>();
 const inFlightGets = new Map<string, Promise<any>>();
 
@@ -87,6 +89,8 @@ export async function syncOfflineQueue(): Promise<{
     try {
       let fetchBody: BodyInit | null = item.body;
       const headers: Record<string, string> = {
+        'X-Provisional-Cert': EMBEDDED_PROVISIONAL_CERT_SERIAL,
+        'X-Provisional-Cert-Sig': EMBEDDED_PROVISIONAL_CERT_SIG,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       };
 
@@ -158,6 +162,8 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
 
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    'X-Provisional-Cert': EMBEDDED_PROVISIONAL_CERT_SERIAL,
+    'X-Provisional-Cert-Sig': EMBEDDED_PROVISIONAL_CERT_SIG,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...((options.headers as Record<string, string>) || {}),
   };

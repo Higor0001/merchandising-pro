@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, CheckCircle2, XCircle, Edit3, Sparkles, ShieldCheck, Send } from 'lucide-react';
+import { Bot, CheckCircle2, XCircle, Sparkles, Send } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { PhotoInput } from '../components/PhotoInput';
-import { ShelfAnnotationEditor, type ShelfAnnotation } from '../components/ShelfAnnotationEditor';
 import { useToast } from '../context/ToastContext';
 
 const AI_AREAS = [
@@ -26,8 +25,8 @@ export const AIPage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [photo, setPhoto] = useState<File | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
   const [sendingId, setSendingId] = useState<number | null>(null);
+  const [humanNotesById, setHumanNotesById] = useState<Record<number, string>>({});
 
   const load = async () => {
     try {
@@ -59,16 +58,13 @@ export const AIPage: React.FC = () => {
       if (res?.offlineQueued) {
         toast('info', 'Foto salva na fila offline e será analisada automaticamente ao reconectar.');
       } else {
-        if (res?.id && res?.image_url) {
-          setEditingId(res.id);
-        }
         toast(
           'ok',
           res?.analysis_mode === 'groq_vision'
-            ? `Análise concluída com Groq Vision${res?.self_verified ? ' (auto-verificada em 2 passos)' : ''}! Revise as caixas e clique em Confirmar para enviar em HD ao Telegram.`
+            ? 'Análise visual concluída com Groq Vision!'
             : res?.analysis_mode === 'gemini_vision'
-            ? `Análise concluída com Gemini Vision${res?.self_verified ? ' (auto-verificada em 2 passos)' : ''}! Revise as caixas e confirme.`
-            : 'Análise gerada em Modo Heurístico. Você pode demarcar manualmente no editor visual abaixo.'
+              ? 'Análise visual concluída com Gemini Vision!'
+              : 'Análise gerada em Modo Heurístico (baseada no histórico da loja).'
         );
         await load();
       }
@@ -79,37 +75,29 @@ export const AIPage: React.FC = () => {
     }
   };
 
-  const handleConfirmAndSend = async (
-    id: number,
-    annotations: ShelfAnnotation[],
-    humanNotes: string,
-    sendToTelegram: boolean
-  ) => {
+  const handleConfirmAndSend = async (id: number, humanNotes: string, sendToTelegram: boolean) => {
     setSendingId(id);
     try {
       const res = await apiFetch<any>(`/ai/analyses/${id}/confirm-and-send`, {
         method: 'POST',
         body: JSON.stringify({
-          annotations,
           human_notes: humanNotes,
           send_to_telegram: sendToTelegram,
         }),
       });
-      setEditingId(null);
       if (sendToTelegram) {
         const origOk = res?.telegram?.original?.sent;
-        const annotOk = res?.telegram?.annotated?.sent;
-        if (origOk || annotOk) {
-          toast('ok', 'Validado 100%! Fotos ORIGINAL (HD) e DEMARCADA (HD) enviadas ao Telegram.');
+        if (origOk) {
+          toast('ok', 'Análise confirmada e foto original em HD enviada ao Telegram!');
         } else {
-          toast('info', 'Marcações salvas em HD! (Telegram não configurado ou indisponível no servidor.)');
+          toast('info', 'Análise confirmada! (Telegram não configurado ou indisponível no servidor.)');
         }
       } else {
-        toast('ok', 'Marcações 100% validadas e imagem demarcada HD atualizada!');
+        toast('ok', 'Análise confirmada com sucesso!');
       }
       await load();
     } catch (err: any) {
-      toast('err', err.message || 'Erro ao confirmar e enviar imagens.');
+      toast('err', err.message || 'Erro ao confirmar análise.');
     } finally {
       setSendingId(null);
     }
@@ -121,11 +109,10 @@ export const AIPage: React.FC = () => {
         method: 'PATCH',
         body: JSON.stringify({ human_validation: 'Rejeitado', human_notes: 'Análise rejeitada pelo operador' }),
       });
-      if (editingId === id) setEditingId(null);
       toast(
         'info',
         res?.telegram_deleted
-          ? 'Análise rejeitada e imagens removidas automaticamente do Telegram!'
+          ? 'Análise rejeitada e foto removida automaticamente do Telegram!'
           : 'Análise marcada como Rejeitada.'
       );
       await load();
@@ -160,10 +147,10 @@ export const AIPage: React.FC = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          <Bot className="w-6 h-6 text-indigo-600" /> Inteligência Artificial para Gôndolas (Precisão 100%)
+          <Bot className="w-6 h-6 text-indigo-600" /> Inteligência Artificial para Gôndolas
         </h1>
         <p className="text-sm text-slate-500">
-          IA com auto-verificação em 2 passos + editor visual interativo: revise as marcações na foto e envie <b>Original + Demarcada em HD</b> ao Telegram
+          Auditoria inteligente de rupturas, frentes, exposição e oportunidades com envio da foto original em HD ao Telegram
         </p>
       </div>
 
@@ -172,7 +159,7 @@ export const AIPage: React.FC = () => {
           <Sparkles className="w-4 h-4 text-indigo-600" /> Nova Análise Inteligente de Gôndola
         </div>
         <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 text-xs text-blue-900">
-          <b>Dica para máxima precisão:</b> tire a foto de frente para a gôndola (suporta <b>fotos panorâmicas</b> de corredor completo em alta resolução). Depois da análise automática, revise as caixas na imagem antes de enviar ao Telegram.
+          <b>Dica:</b> tire a foto de frente para a gôndola (suporta <b>fotos panorâmicas</b> de corredor completo em alta resolução HD). A IA gera o diagnóstico completo sem alterar a foto original.
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className="px-3 py-2 border rounded-xl text-sm">
@@ -191,7 +178,7 @@ export const AIPage: React.FC = () => {
           disabled={analyzing}
           className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow disabled:opacity-60"
         >
-          {analyzing ? 'Analisando e auditando em 2 passos...' : 'Executar Análise com IA'}
+          {analyzing ? 'Analisando gôndola com IA...' : 'Executar Análise com IA'}
         </button>
       </form>
 
@@ -209,9 +196,7 @@ export const AIPage: React.FC = () => {
           const issues: string[] = safeParse(a.exposure_issues_json);
           const suggestions: string[] = safeParse(a.suggestions_json);
           const extraPoints: string[] = safeParse(a.extra_point_opportunities_json);
-          const annotations: ShelfAnnotation[] = safeParse(a.annotations_json);
-
-          const isEditorOpen = editingId === a.id || (a.human_validation === 'Pendente' && Boolean(a.image_url) && editingId === null && analyses[0]?.id === a.id);
+          const noteDraft = humanNotesById[a.id] ?? a.human_notes ?? '';
 
           return (
             <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
@@ -234,11 +219,6 @@ export const AIPage: React.FC = () => {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {renderModeBadge(a.analysis_mode, a.model_used)}
-                  {a.self_verified && (
-                    <span className="px-2.5 py-1 rounded-full bg-teal-100 text-teal-800 text-xs font-bold flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5" /> 2 Passos IA
-                    </span>
-                  )}
                   {a.telegram_sent && (
                     <span className="px-2.5 py-1 rounded-full bg-sky-100 text-sky-800 text-xs font-bold flex items-center gap-1">
                       <Send className="w-3 h-3" /> HD Enviado ao Telegram
@@ -247,77 +227,31 @@ export const AIPage: React.FC = () => {
                   <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                     a.human_validation === 'Confirmado' ? 'bg-emerald-100 text-emerald-700' :
                     a.human_validation === 'Rejeitado' ? 'bg-red-100 text-red-700' :
-                    a.human_validation === 'Ajustado' ? 'bg-amber-100 text-amber-700' : 'bg-amber-100 text-amber-800'
+                    'bg-amber-100 text-amber-800'
                   }`}>
-                    {a.human_validation === 'Pendente' ? 'Aguardando Revisão Visual' : `Validação: ${a.human_validation}`}
+                    {a.human_validation === 'Pendente' ? 'Aguardando Confirmação' : `Validação: ${a.human_validation}`}
                   </span>
                 </div>
               </div>
 
-              {isEditorOpen && a.image_url ? (
-                <ShelfAnnotationEditor
-                  imageUrl={a.image_url}
-                  initialAnnotations={annotations}
-                  initialNotes={a.human_notes || ''}
-                  submitting={sendingId === a.id}
-                  onConfirmAndSend={(nextAnns, nextNotes, sendTg) => handleConfirmAndSend(a.id, nextAnns, nextNotes, sendTg)}
-                  onCancel={() => setEditingId(-1)}
-                />
-              ) : (
-                (a.image_url || a.annotated_image_url) && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {a.image_url && (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs font-bold text-slate-600">
-                          <span>Foto Original (HD)</span>
-                          <a href={a.image_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                            Abrir original
-                          </a>
-                        </div>
-                        <img src={a.image_url} alt="Gôndola original" className="w-full max-h-72 rounded-xl border object-contain bg-slate-950/5" />
-                      </div>
-                    )}
-                    {a.annotated_image_url && (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs font-bold text-indigo-700">
-                          <span>Foto Demarcada ({annotations.length} área(s))</span>
-                          <a href={a.annotated_image_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
-                            Abrir demarcada (HD)
-                          </a>
-                        </div>
-                        <img src={a.annotated_image_url} alt="Gôndola demarcada pela IA" className="w-full max-h-72 rounded-xl border border-indigo-200 object-contain bg-slate-950/5" />
-                      </div>
-                    )}
+              {a.image_url && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                    <span>Foto Original (HD)</span>
+                    <a href={a.image_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                      Abrir imagem original em HD
+                    </a>
                   </div>
-                )
-              )}
-
-              {annotations.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {annotations.map((ann, idx) => (
-                    <span
-                      key={idx}
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                        ann.category === 'rupture'
-                          ? 'bg-red-100 text-red-700'
-                          : ann.category === 'brand'
-                          ? 'bg-blue-100 text-blue-700'
-                          : ann.category === 'opportunity'
-                          ? 'bg-purple-100 text-purple-700'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      #{idx + 1} {ann.label}
-                    </span>
-                  ))}
+                  <img
+                    src={a.image_url}
+                    alt="Gôndola original em HD"
+                    className="w-full max-h-80 rounded-xl border object-contain bg-slate-950/5"
+                  />
                 </div>
               )}
 
               <div className="p-3 rounded-xl bg-slate-50 text-xs text-slate-700 space-y-1">
                 <div><b>Relatório Automático:</b> {a.auto_report}</div>
-                {a.verification_notes && (
-                  <div className="text-teal-800"><b>Auditoria 2ª Passagem IA:</b> {a.verification_notes}</div>
-                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
@@ -350,34 +284,45 @@ export const AIPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 pt-2 border-t">
-                {a.image_url && !isEditorOpen && (
+              <div className="space-y-2 pt-2 border-t">
+                <input
+                  value={noteDraft}
+                  onChange={(e) => setHumanNotesById((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                  placeholder="Observação do promotor (opcional)..."
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-xl text-xs"
+                />
+                <div className="flex flex-wrap gap-2">
+                  {a.image_url && (
+                    <button
+                      type="button"
+                      disabled={sendingId === a.id}
+                      onClick={() => handleConfirmAndSend(a.id, noteDraft, true)}
+                      className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold rounded-xl flex items-center gap-1.5"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      {sendingId === a.id
+                        ? 'Enviando HD...'
+                        : a.telegram_sent
+                          ? 'Reenviar Foto HD ao Telegram'
+                          : 'Confirmar & Enviar HD ao Telegram'}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setEditingId(a.id)}
-                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    {a.telegram_sent ? 'Editar Marcações / Reenviar HD' : 'Revisar Marcações & Enviar HD ao Telegram'}
-                  </button>
-                )}
-                {!a.image_url && (
-                  <button
-                    type="button"
-                    onClick={() => handleConfirmAndSend(a.id, annotations, a.human_notes || '', false)}
-                    className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-xl flex items-center gap-1"
+                    disabled={sendingId === a.id}
+                    onClick={() => handleConfirmAndSend(a.id, noteDraft, false)}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold rounded-xl flex items-center gap-1"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" /> Confirmar Análise
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => rejectAnalysis(a.id)}
-                  className="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-xl flex items-center gap-1"
-                >
-                  <XCircle className="w-3.5 h-3.5" /> Rejeitar
-                </button>
-                {a.human_notes && <span className="text-xs text-slate-500 self-center ml-2">Nota humana: {a.human_notes}</span>}
+                  <button
+                    type="button"
+                    onClick={() => rejectAnalysis(a.id)}
+                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl flex items-center gap-1"
+                  >
+                    <XCircle className="w-3.5 h-3.5" /> Rejeitar
+                  </button>
+                </div>
               </div>
             </div>
           );

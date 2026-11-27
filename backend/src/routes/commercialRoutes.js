@@ -6,7 +6,7 @@ const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
-const { applyAuditWatermark, normalizeAnnotations, renderAnnotatedImage } = require('../services/imageAnnotator');
+const { applyAuditWatermark } = require('../services/imageAnnotator');
 const { sendPhotoToTelegram, sendMessageToTelegram, deleteTelegramMessage } = require('../services/telegramService');
 
 /**
@@ -606,7 +606,6 @@ router.get('/ai/analyses', async (_req, res, next) => {
 });
 
 router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) => {
-  let annotatedPath = null;
   let watermarkedOrigPath = null;
   try {
     const { store_id, visit_id, notes, area: requestedArea } = req.body || {};
@@ -644,34 +643,6 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       imageUrl = await saveFileToGridFS(origToPersist);
     }
 
-    let annotatedImageUrl = '';
-    let finalAnnotations = result.annotations || [];
-    if (imagePath) {
-      try {
-        const rendered = await renderAnnotatedImage({
-          imagePath,
-          annotations: finalAnnotations,
-          outputDir: uploadDir,
-          planogramScore: result.planogram_score,
-          storeName: store?.name,
-          area: resolvedArea,
-          capturedAt,
-        });
-        if (rendered?.annotatedPath) {
-          annotatedPath = rendered.annotatedPath;
-          finalAnnotations = rendered.annotations;
-          if (rendered.isPanoramic) isPanoramic = true;
-          annotatedImageUrl = await saveFileToGridFS({
-            path: rendered.annotatedPath,
-            filename: rendered.filename,
-            mimetype: rendered.mimetype,
-          });
-        }
-      } catch (annotErr) {
-        console.error('Erro ao renderizar imagem demarcada pela IA:', annotErr.message);
-      }
-    }
-
     const id = await nextId('ai_analyses');
     const doc = {
       id,
@@ -681,8 +652,8 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       area: resolvedArea,
       is_panoramic: isPanoramic,
       image_url: imageUrl,
-      annotated_image_url: annotatedImageUrl,
-      annotations_json: JSON.stringify(finalAnnotations),
+      annotated_image_url: '',
+      annotations_json: '[]',
       detected_ruptures_json: JSON.stringify(result.detected_ruptures),
       detected_brands_json: JSON.stringify(result.detected_brands),
       exposure_issues_json: JSON.stringify(result.exposure_issues),
@@ -691,8 +662,8 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       extra_point_opportunities_json: JSON.stringify(result.extra_point_opportunities),
       auto_report: result.auto_report,
       confidence: result.confidence,
-      self_verified: Boolean(result.self_verified),
-      verification_notes: result.verification_notes || '',
+      self_verified: false,
+      verification_notes: '',
       analysis_mode: result.analysis_mode || 'heuristic_fallback',
       model_used: result.model_used || '',
       human_validation: 'Pendente',
@@ -711,7 +682,7 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       'AI_ANALYZE',
       'ai_analyses',
       id,
-      `Análise IA (${doc.analysis_mode}, área=${resolvedArea}) ${finalAnnotations.length} demarcações`
+      `Análise IA (${doc.analysis_mode}, área=${resolvedArea})`
     );
     res.status(201).json(doc);
   } catch (err) {
@@ -719,66 +690,34 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
   } finally {
     await Promise.all([
       cleanupUploadedFile(req.file),
-      cleanupUploadedFile(annotatedPath),
       cleanupUploadedFile(watermarkedOrigPath),
     ]);
   }
 });
 
-// Confirmar 100% as marcações (após revisão/edição visual no frontend), re-renderizar HD e enviar Original + Demarcada ao Telegram
+// Confirmar análise da IA e enviar foto ORIGINAL em HD ao Telegram (sem demarcador visual)
 router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
   let tempOrigPath = null;
-  let tempAnnotPath = null;
   try {
     const aid = Number(req.params.id);
     const aiCol = await col('ai_analyses');
     const existing = await aiCol.findOne({ id: aid });
     if (!existing) return res.status(404).json({ error: 'Análise não encontrada.' });
 
-    const { annotations, human_notes = '', send_to_telegram = true } = req.body || {};
-    const parsedExisting = (() => {
-      try {
-        return JSON.parse(existing.annotations_json || '[]');
-      } catch {
-        return [];
-      }
-    })();
-    const finalAnnotations = Array.isArray(annotations) ? normalizeAnnotations(annotations) : parsedExisting;
+    const { human_notes = '', send_to_telegram = true } = req.body || {};
     const store = existing.store_id ? await (await col('stores')).findOne({ id: Number(existing.store_id) }) : null;
 
-    let annotatedImageUrl = existing.annotated_image_url || '';
-    if (existing.image_url) {
+    if (send_to_telegram && existing.image_url) {
       tempOrigPath = await materializeImageToTemp(existing.image_url, `ai-orig-${aid}`);
-      if (tempOrigPath) {
-        const rendered = await renderAnnotatedImage({
-          imagePath: tempOrigPath,
-          annotations: finalAnnotations,
-          outputDir: uploadDir,
-          planogramScore: existing.planogram_score,
-          storeName: store?.name,
-          area: existing.area || 'Gôndola Principal',
-          capturedAt: existing.created_at,
-        });
-        if (rendered?.annotatedPath) {
-          tempAnnotPath = rendered.annotatedPath;
-          annotatedImageUrl = await saveFileToGridFS({
-            path: rendered.annotatedPath,
-            filename: rendered.filename,
-            mimetype: rendered.mimetype,
-          });
-        }
-      }
     }
 
     let telegramSent = Boolean(existing.telegram_sent);
     let telegramSentAt = existing.telegram_sent_at || null;
     let telegramOrigMsgId = existing.telegram_original_message_id || null;
-    let telegramAnnotMsgId = existing.telegram_annotated_message_id || null;
     let telegramChatId = existing.telegram_chat_id || null;
     let telegramResults = null;
 
     if (send_to_telegram && tempOrigPath) {
-      // Se já havia envio anterior no Telegram, apaga as mensagens antigas automaticamente ao substituir
       if (existing.telegram_original_message_id) {
         await deleteTelegramMessage({
           messageId: existing.telegram_original_message_id,
@@ -798,41 +737,23 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
         area: existing.area || 'Gôndola Principal',
         visitId: existing.visit_id || null,
         isPanoramic: Boolean(existing.is_panoramic),
-        reason: `Score Planograma ${existing.planogram_score}% • Validada 100%`,
+        reason: `Auditoria IA • Score Planograma ${existing.planogram_score}%`,
         storeName: store?.name,
         promoterName: req.user?.name,
         details: `${existing.auto_report || ''}${human_notes ? ` | Nota: ${human_notes}` : ''}`.trim(),
       });
-      let r2 = { sent: false };
-      if (tempAnnotPath) {
-        const legend = finalAnnotations.length
-          ? finalAnnotations.map((a, i) => `#${i + 1} [${a.category}] ${a.label}`).join(' | ')
-          : 'Área geral de gôndola destacada';
-        r2 = await sendPhotoToTelegram({
-          filePath: tempAnnotPath,
-          stage: 'IA_DEMARCADA',
-          area: existing.area || 'Gôndola Principal',
-          visitId: existing.visit_id || null,
-          isPanoramic: Boolean(existing.is_panoramic),
-          reason: `${finalAnnotations.length} área(s) demarcada(s) • Validada 100%`,
-          storeName: store?.name,
-          promoterName: req.user?.name,
-          details: `Marcações validadas: ${legend}`,
-        });
-      }
-      telegramResults = { original: r1, annotated: r2 };
-      if (r1.sent || r2.sent) {
+      telegramResults = { original: r1 };
+      if (r1.sent) {
         telegramSent = true;
         telegramSentAt = nowStr();
         telegramOrigMsgId = r1?.message_id || null;
-        telegramAnnotMsgId = r2?.message_id || null;
-        telegramChatId = r1?.chat_id || r2?.chat_id || null;
+        telegramChatId = r1?.chat_id || null;
       }
     }
 
     const updatedFields = {
-      annotations_json: JSON.stringify(finalAnnotations),
-      annotated_image_url: annotatedImageUrl,
+      annotations_json: '[]',
+      annotated_image_url: '',
       human_validation: 'Confirmado',
       human_notes: String(human_notes || '').trim(),
       verified_by: req.user.id,
@@ -840,7 +761,7 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
       telegram_sent: telegramSent,
       telegram_sent_at: telegramSentAt,
       telegram_original_message_id: telegramOrigMsgId,
-      telegram_annotated_message_id: telegramAnnotMsgId,
+      telegram_annotated_message_id: null,
       telegram_chat_id: telegramChatId,
     };
 
@@ -850,7 +771,7 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
       'AI_CONFIRM_SEND',
       'ai_analyses',
       aid,
-      `Marcações validadas (${finalAnnotations.length} áreas) | Telegram=${telegramSent}`
+      `Análise IA confirmada | Telegram=${telegramSent}`
     );
 
     const updated = await aiCol.findOne({ id: aid }, { projection: { _id: 0 } });
@@ -858,7 +779,7 @@ router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
   } catch (err) {
     next(err);
   } finally {
-    await Promise.all([cleanupUploadedFile(tempOrigPath), cleanupUploadedFile(tempAnnotPath)]);
+    await cleanupUploadedFile(tempOrigPath);
   }
 });
 

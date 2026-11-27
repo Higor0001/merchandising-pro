@@ -29,7 +29,7 @@ export interface ProvisionalCertificate {
   assinatura_digital: string;
 }
 
-const DEFAULT_CERTIFICATE: ProvisionalCertificate = {
+export const EMBEDDED_CERTIFICATE: ProvisionalCertificate = {
   serial: 'MPRO-CERT-PROV-2026-HIGOR-CI',
   tipo: 'Certificado Digital Provisório',
   sistema: 'MERCHANDISING PRO',
@@ -38,9 +38,19 @@ const DEFAULT_CERTIFICATE: ProvisionalCertificate = {
   uf: 'ES',
   email: 'higor@merchandising.com',
   emitido_em: '2026-11-27T03:40:00-03:00',
-  status: 'ATIVO (Tela de Login Desativada Provisoriamente)',
+  status: 'ATIVO (Inserido no site — Login desativado provisoriamente)',
   algoritmo: 'SHA-256',
-  assinatura_digital: '',
+  assinatura_digital: '8EC3C9B7D986FE5EC7404711F5333EA6FA6A776E21D5F0B8498DB051ED505FA8',
+};
+
+const EMBEDDED_PROVISIONAL_USER: User = {
+  id: 1,
+  name: 'Higor',
+  email: 'higor@merchandising.com',
+  role: 'admin',
+  region: 'Cachoeiro de Itapemirim',
+  city: 'Cachoeiro de Itapemirim',
+  title: 'Promotor',
 };
 
 interface AuthContextType {
@@ -48,10 +58,8 @@ interface AuthContextType {
   certificate: ProvisionalCertificate | null;
   loginDisabled: boolean;
   loading: boolean;
-  initializing: boolean;
-  authError: string | null;
   login: (email: string, password: string) => Promise<void>;
-  retryProvisionalAccess: () => Promise<void>;
+  importCertificateFile: (file: File) => Promise<{ valid: boolean; message: string }>;
   downloadCertificate: () => void;
   logout: () => void;
 }
@@ -63,29 +71,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const saved = localStorage.getItem('merchpro_user');
       const token = localStorage.getItem('merchpro_token');
-      return saved && token ? JSON.parse(saved) : null;
+      if (saved && token) {
+        const parsed = JSON.parse(saved);
+        if (!PROVISIONAL_LOGIN_DISABLED || parsed?.email === EMBEDDED_PROVISIONAL_USER.email) {
+          return parsed;
+        }
+      }
     } catch {
-      return null;
+      // ignore
     }
+    // Entra DIRETO no sistema com o certificado digital inserido (sem passar pela tela de login)
+    return PROVISIONAL_LOGIN_DISABLED ? EMBEDDED_PROVISIONAL_USER : null;
   });
+
   const [certificate, setCertificate] = useState<ProvisionalCertificate | null>(() => {
     try {
       const saved = localStorage.getItem('merchpro_provisional_cert');
-      return saved ? JSON.parse(saved) : PROVISIONAL_LOGIN_DISABLED ? DEFAULT_CERTIFICATE : null;
+      if (saved) return JSON.parse(saved);
     } catch {
-      return PROVISIONAL_LOGIN_DISABLED ? DEFAULT_CERTIFICATE : null;
+      // ignore
     }
+    return PROVISIONAL_LOGIN_DISABLED ? EMBEDDED_CERTIFICATE : null;
   });
-  const [loading, setLoading] = useState(false);
-  const [initializing, setInitializing] = useState<boolean>(() => {
-    if (!PROVISIONAL_LOGIN_DISABLED) return false;
-    return !localStorage.getItem('merchpro_token');
-  });
-  const [authError, setAuthError] = useState<string | null>(null);
 
-  const activateProvisionalSession = useCallback(async () => {
-    setInitializing(true);
-    setAuthError(null);
+  const [loading, setLoading] = useState(false);
+
+  const syncProvisionalSessionInBackground = useCallback(async () => {
     try {
       const res = await apiFetch<{
         token: string;
@@ -102,58 +113,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCertificate(res.certificate);
         }
       }
-    } catch (err: any) {
-      setAuthError(err?.message || 'Não foi possível validar o certificado digital provisório.');
-    } finally {
-      setInitializing(false);
+    } catch {
+      // Mesmo offline ou antes da resposta, o certificado embutido já autentica diretamente
+      setUser((prev) => prev || EMBEDDED_PROVISIONAL_USER);
+      setCertificate((prev) => prev || EMBEDDED_CERTIFICATE);
     }
   }, []);
 
   useEffect(() => {
     const onExpired = () => {
+      if (PROVISIONAL_LOGIN_DISABLED) {
+        void syncProvisionalSessionInBackground();
+        return;
+      }
       void clearAuthCaches();
       setUser(null);
-      if (PROVISIONAL_LOGIN_DISABLED) {
-        void activateProvisionalSession();
-      }
     };
     window.addEventListener('auth-expired', onExpired);
     return () => window.removeEventListener('auth-expired', onExpired);
-  }, [activateProvisionalSession]);
+  }, [syncProvisionalSessionInBackground]);
 
-  // Acesso direto com Certificado Digital Provisório (tela de login desativada)
   useEffect(() => {
     if (PROVISIONAL_LOGIN_DISABLED) {
-      const token = localStorage.getItem('merchpro_token');
-      const savedRaw = localStorage.getItem('merchpro_user');
-      let savedUser: User | null = null;
-      try {
-        savedUser = savedRaw ? JSON.parse(savedRaw) : null;
-      } catch {
-        savedUser = null;
-      }
-
-      if (!token || !savedUser || savedUser.email !== 'higor@merchandising.com') {
-        void activateProvisionalSession();
-        return;
-      }
-
+      localStorage.setItem('merchpro_provisional_cert', JSON.stringify(EMBEDDED_CERTIFICATE));
       if (navigator.onLine) {
-        apiFetch<{ user: User }>('/auth/me')
-          .then((res) => {
-            if (res?.user) {
-              const merged = {
-                ...res.user,
-                city: res.user.city || 'Cachoeiro de Itapemirim',
-                title: res.user.title || 'Promotor',
-              };
-              localStorage.setItem('merchpro_user', JSON.stringify(merged));
-              setUser(merged);
-            }
-          })
-          .catch(() => {
-            void activateProvisionalSession();
-          });
+        void syncProvisionalSessionInBackground();
       }
       return;
     }
@@ -170,7 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .catch(() => {
         // Se retornar 401, o evento auth-expired já limpa a sessão
       });
-  }, [activateProvisionalSession]);
+  }, [syncProvisionalSessionInBackground]);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
@@ -187,21 +171,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const importCertificateFile = async (file: File): Promise<{ valid: boolean; message: string }> => {
+    try {
+      const text = await file.text();
+      const hasSerial = text.includes(EMBEDDED_CERTIFICATE.serial);
+      const hasSig = text.toUpperCase().includes(EMBEDDED_CERTIFICATE.assinatura_digital);
+      if (!hasSerial || !hasSig) {
+        return {
+          valid: false,
+          message: 'Arquivo não corresponde ao Certificado Digital Provisório oficial de Higor (Cachoeiro de Itapemirim).',
+        };
+      }
+      localStorage.setItem('merchpro_provisional_cert', JSON.stringify(EMBEDDED_CERTIFICATE));
+      setCertificate(EMBEDDED_CERTIFICATE);
+      await syncProvisionalSessionInBackground();
+      return {
+        valid: true,
+        message: 'Certificado Digital validado com sucesso! Promotor: Higor • Cachoeiro de Itapemirim.',
+      };
+    } catch {
+      return { valid: false, message: 'Não foi possível ler o arquivo de certificado.' };
+    }
+  };
+
   const downloadCertificate = () => {
-    const cert = certificate || DEFAULT_CERTIFICATE;
+    const cert = certificate || EMBEDDED_CERTIFICATE;
     const content = [
-      '-----BEGIN MERCHANDISING PRO DIGITAL CERTIFICATE-----',
-      `Sistema:            ${cert.sistema}`,
-      `Tipo:               ${cert.tipo}`,
-      `Número de Série:    ${cert.serial}`,
+      '====================================================================',
+      '          MERCHANDISING PRO - CERTIFICADO DIGITAL PROVISÓRIO        ',
+      '====================================================================',
       `Promotor:           ${cert.promotor}`,
       `Cidade:             ${cert.cidade} - ${cert.uf}`,
-      `E-mail Vinculado:   ${cert.email}`,
+      `Sistema:            ${cert.sistema}`,
+      `Número de Série:    ${cert.serial}`,
       `Status:             ${cert.status}`,
-      `Data de Emissão:    ${cert.emitido_em}`,
+      `Data de Emissão:    27/11/2026 03:40 (Horário de Brasília)`,
       `Algoritmo:          ${cert.algoritmo}`,
-      `Assinatura Digital: ${cert.assinatura_digital || 'VALIDADA-EM-SERVIDOR'}`,
-      '-----END MERCHANDISING PRO DIGITAL CERTIFICATE-----',
+      `Impressão Digital:  ${cert.assinatura_digital}`,
+      '====================================================================',
       '',
     ].join('\n');
     const blob = new Blob([content], { type: 'application/x-x509-ca-cert;charset=utf-8' });
@@ -216,14 +223,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    if (PROVISIONAL_LOGIN_DISABLED) return;
     localStorage.removeItem('merchpro_token');
     localStorage.removeItem('merchpro_user');
     clearMemoryApiCache();
     void clearAuthCaches();
     setUser(null);
-    if (PROVISIONAL_LOGIN_DISABLED) {
-      void activateProvisionalSession();
-    }
   };
 
   return (
@@ -233,10 +238,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         certificate,
         loginDisabled: PROVISIONAL_LOGIN_DISABLED,
         loading,
-        initializing,
-        authError,
         login,
-        retryProvisionalAccess: activateProvisionalSession,
+        importCertificateFile,
         downloadCertificate,
         logout,
       }}

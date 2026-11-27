@@ -63,7 +63,7 @@ const PageSkeleton: React.FC = () => (
 );
 
 const AppContent: React.FC = () => {
-  const { user, loginDisabled, initializing, authError, retryProvisionalAccess } = useAuth();
+  const { user, loginDisabled } = useAuth();
   const initial = parseHashRoute();
   const [page, setPage] = useState<MenuId>(initial.page);
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(initial.storeId);
@@ -78,42 +78,9 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  if (!user) {
-    if (loginDisabled) {
-      return (
-        <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 text-center shadow-2xl">
-            <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-black text-lg">
-              MP
-            </div>
-            <div>
-              <h1 className="font-display text-lg font-extrabold">Certificado Digital Provisório</h1>
-              <p className="text-xs text-slate-400 mt-1">
-                Promotor: <b className="text-white">Higor</b> • Cidade: <b className="text-white">Cachoeiro de Itapemirim</b>
-              </p>
-            </div>
-            {initializing ? (
-              <p className="text-xs text-emerald-300 animate-pulse">Validando certificado e abrindo o sistema...</p>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-xs text-rose-300">{authError || 'Aguardando conexão com o servidor.'}</p>
-                <button
-                  type="button"
-                  onClick={() => void retryProvisionalAccess()}
-                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white"
-                >
-                  Tentar novamente
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      );
-    }
-    return <LoginPage />;
-  }
+  if (!user && !loginDisabled) return <LoginPage />;
 
-  const isManager = user.role === 'admin' || user.role === 'supervisor';
+  const isManager = !user || user.role === 'admin' || user.role === 'supervisor';
 
   const handleNavigate = (nextPage: MenuId) => {
     setSelectedStoreId(null);

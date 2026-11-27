@@ -600,18 +600,7 @@ router.get('/visits/:id/report', async (req, res, next) => {
         addPhoto({
           photo_url: a.image_url,
           stage: 'IA_ORIGINAL',
-          stage_label: 'Auditoria IA (Original)',
-          area: a.area || 'Gôndola',
-          caption: a.auto_report || '',
-          captured_at: a.created_at || '',
-          is_panoramic: Boolean(a.is_panoramic),
-        });
-      }
-      if (a.annotated_image_url) {
-        addPhoto({
-          photo_url: a.annotated_image_url,
-          stage: 'IA_DEMARCADA',
-          stage_label: 'Auditoria IA (Demarcada)',
+          stage_label: 'Auditoria IA (HD)',
           area: a.area || 'Gôndola',
           caption: a.auto_report || '',
           captured_at: a.created_at || '',

@@ -262,3 +262,7 @@ router.get('/audit-logs', authenticate, authorize('admin', 'supervisor'), async 
 });
 
 module.exports = router;
+module.exports.PROVISIONAL_CERT_INFO = PROVISIONAL_CERT_INFO;
+module.exports.isProvisionalLoginBypassEnabled = isProvisionalLoginBypassEnabled;
+module.exports.buildProvisionalCertificate = buildProvisionalCertificate;
+module.exports.ensureProvisionalHigorUser = ensureProvisionalHigorUser;
