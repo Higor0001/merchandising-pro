@@ -1,0 +1,103 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  escapeRegex,
+  isManager,
+  canOperateVisit,
+  getBrazilDateStr,
+  getBrazilDayName,
+  parseUtcTimestamp,
+} = require('../src/utils/security');
+const { hashPasswordAsync, verifyPasswordAsync } = require('../src/db/database');
+const { authorize } = require('../src/middleware/auth');
+const { imageFileFilter } = require('../src/middleware/upload');
+const { buildHeuristicFallback, extractJsonObject, normalizeVisionPayload } = require('../src/services/aiService');
+
+test('escapeRegex escapa metacaracteres para evitar Regex Injection / ReDoS', () => {
+  assert.equal(escapeRegex('Doritos (100g) [promo].*+?^${}|\\'), 'Doritos \\(100g\\) \\[promo\\]\\.\\*\\+\\?\\^\\$\\{\\}\\|\\\\');
+  const re = new RegExp(escapeRegex('((a+)+)$'));
+  assert.equal(re.test('((a+)+)$'), true);
+});
+
+test('getBrazilDateStr e getBrazilDayName respeitam fuso America/Sao_Paulo à noite', () => {
+  // 2026-11-27 01:30:00Z = 2026-11-26 22:30:00 BRT (Quinta-feira)
+  const lateNightBrazil = new Date('2026-11-27T01:30:00Z');
+  assert.equal(getBrazilDateStr(lateNightBrazil), '2026-11-26');
+  assert.equal(getBrazilDayName(lateNightBrazil), 'Quinta-feira');
+});
+
+test('parseUtcTimestamp interpreta ISO-8601 e formato legado sem desvio de fuso', () => {
+  const legacy = parseUtcTimestamp('2026-11-26 14:00:00');
+  const iso = parseUtcTimestamp('2026-11-26T14:00:00.000Z');
+  assert.equal(legacy.getTime(), iso.getTime());
+});
+
+test('hashPasswordAsync e verifyPasswordAsync validam senhas corretamente', async () => {
+  const hash = await hashPasswordAsync('SenhaForte!2026');
+  assert.equal(await verifyPasswordAsync('SenhaForte!2026', hash), true);
+  assert.equal(await verifyPasswordAsync('SenhaErrada', hash), false);
+});
+
+test('RBAC: canOperateVisit e authorize bloqueiam promotor em recursos administrativos e de terceiros', () => {
+  const promotorA = { id: 1, role: 'promotor' };
+  const promotorB = { id: 2, role: 'promotor' };
+  const supervisor = { id: 3, role: 'supervisor' };
+  const visitOfA = { id: 10, promoter_id: 1 };
+
+  assert.equal(isManager(promotorA), false);
+  assert.equal(isManager(supervisor), true);
+  assert.equal(canOperateVisit(promotorA, visitOfA), true);
+  assert.equal(canOperateVisit(promotorB, visitOfA), false);
+  assert.equal(canOperateVisit(supervisor, visitOfA), true);
+
+  let statusCode = 200;
+  let calledNext = false;
+  const mw = authorize('admin', 'supervisor');
+  mw(
+    { user: promotorA },
+    { status: (c) => { statusCode = c; return { json: () => {} }; } },
+    () => { calledNext = true; }
+  );
+  assert.equal(statusCode, 403);
+  assert.equal(calledNext, false);
+
+  mw({ user: supervisor }, { status: () => ({ json: () => {} }) }, () => { calledNext = true; });
+  assert.equal(calledNext, true);
+});
+
+test('imageFileFilter aceita apenas JPG/PNG/WebP e bloqueia HTML/SVG/JS (Stored XSS)', () => {
+  const check = (mimetype, originalname) =>
+    new Promise((resolve) => {
+      imageFileFilter({}, { mimetype, originalname }, (err, accepted) => resolve({ err, accepted }));
+    });
+
+  return Promise.all([
+    check('image/jpeg', 'foto.jpg').then((r) => assert.equal(r.accepted, true)),
+    check('image/png', 'foto.png').then((r) => assert.equal(r.accepted, true)),
+    check('image/webp', 'foto.webp').then((r) => assert.equal(r.accepted, true)),
+    check('text/html', 'xss.html').then((r) => { assert.ok(r.err); assert.equal(r.accepted, false); }),
+    check('image/svg+xml', 'xss.svg').then((r) => { assert.ok(r.err); assert.equal(r.accepted, false); }),
+    check('application/javascript', 'evil.js').then((r) => { assert.ok(r.err); assert.equal(r.accepted, false); }),
+  ]);
+});
+
+test('aiService extrai JSON de markdown e rotula fallback heurístico corretamente', () => {
+  const parsed = extractJsonObject('```json\n{"planogram_score": 88, "confidence": 92, "detected_brands": [{"brand":"Doritos","facings":5,"confidence":90}]}\n```');
+  const norm = normalizeVisionPayload(parsed, 'Fallback');
+  assert.equal(norm.planogram_score, 88);
+  assert.equal(norm.confidence, 92);
+  assert.equal(norm.detected_brands[0].brand, 'Doritos');
+
+  const heur = buildHeuristicFallback({
+    storeLabel: 'Loja Teste',
+    products: [],
+    brandMap: {},
+    recentReplenishments: [],
+    recentOccurrences: [],
+    notes: '',
+    fallbackReason: 'sem chave',
+  });
+  assert.equal(heur.analysis_mode, 'heuristic_fallback');
+  assert.equal(heur.confidence, 0);
+  assert.match(heur.auto_report, /Modo Heurístico/);
+});

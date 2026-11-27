@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Camera, RotateCcw, X } from 'lucide-react';
 
 interface PhotoInputProps {
@@ -67,16 +67,19 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
   label = 'Capturar / Anexar Foto',
   onFileSelect,
   file,
+  cameraOnly = false,
   facingMode = 'environment',
   large = false,
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
   const [capturedAt, setCapturedAt] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (file === null) {
       setPreview(null);
       setCapturedAt(null);
+      if (inputRef.current) inputRef.current.value = '';
     }
   }, [file]);
 
@@ -97,8 +100,11 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
   const clearSelection = () => {
     setPreview(null);
     setCapturedAt(null);
+    if (inputRef.current) inputRef.current.value = '';
     onFileSelect(null);
   };
+
+  const captureAttr = cameraOnly ? facingMode : undefined;
 
   return (
     <div className="space-y-2">
@@ -111,9 +117,10 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
           <Camera className={large ? 'w-6 h-6 text-blue-600' : 'w-4 h-4 text-blue-600'} />
           <span>{label}</span>
           <input
+            ref={inputRef}
             type="file"
-            accept="image/*"
-            capture={facingMode}
+            accept="image/jpeg,image/png,image/webp,image/*"
+            capture={captureAttr}
             className="hidden"
             onChange={handleChange}
           />
@@ -142,8 +149,8 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
               Refazer Foto
               <input
                 type="file"
-                accept="image/*"
-                capture={facingMode}
+                accept="image/jpeg,image/png,image/webp,image/*"
+                capture={captureAttr}
                 className="hidden"
                 onChange={handleChange}
               />

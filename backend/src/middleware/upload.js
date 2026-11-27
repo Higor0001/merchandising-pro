@@ -4,6 +4,9 @@ const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
 const { getGridFSBucket } = require('../db/database');
 
+const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
 const uploadDir = process.env.VERCEL
   ? '/tmp/merchandising_uploads'
   : path.join(__dirname, '..', '..', 'uploads');
@@ -26,10 +29,24 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
   });
 }
 
+function imageFileFilter(_req, file, cb) {
+  const mime = String(file?.mimetype || '').toLowerCase();
+  const ext = path.extname(file?.originalname || '').toLowerCase();
+  const validMime = ALLOWED_IMAGE_MIMES.has(mime);
+  const validExt = !ext || ALLOWED_IMAGE_EXTS.has(ext);
+  if (!validMime || !validExt) {
+    const err = new Error('Formato de arquivo inválido. Envie apenas imagens JPG, PNG ou WebP.');
+    err.statusCode = 400;
+    return cb(err, false);
+  }
+  cb(null, true);
+}
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || '.jpg') || '.jpg';
+    const rawExt = path.extname(file.originalname || '').toLowerCase();
+    const ext = ALLOWED_IMAGE_EXTS.has(rawExt) ? rawExt : '.jpg';
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
     cb(null, unique);
   },
@@ -37,6 +54,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  fileFilter: imageFileFilter,
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
@@ -72,4 +90,23 @@ async function saveFileToGridFS(file) {
   return `/uploads/${file.filename}`;
 }
 
-module.exports = { upload, uploadDir, saveFileToGridFS };
+/**
+ * Remove arquivo temporário do disco após persistência no Cloudinary/GridFS e envio ao Telegram.
+ */
+async function cleanupUploadedFile(file) {
+  const filePath = typeof file === 'string' ? file : file?.path;
+  if (!filePath) return;
+  try {
+    await fs.promises.unlink(filePath);
+  } catch {
+    // ignore if already deleted
+  }
+}
+
+module.exports = {
+  upload,
+  uploadDir,
+  imageFileFilter,
+  saveFileToGridFS,
+  cleanupUploadedFile,
+};

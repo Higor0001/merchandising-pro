@@ -3,6 +3,7 @@ import { Barcode, PackagePlus, Sparkles, Send, FileText, Copy, CheckSquare, Sear
 import { apiFetch } from '../services/api';
 import { exportToPDF } from '../services/exportUtils';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { BarcodeScannerModal } from '../components/BarcodeScannerModal';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import {
@@ -13,6 +14,7 @@ import {
 
 export const ReplenishmentPage: React.FC = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [rows, setRows] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
   const [products, setProducts] = useState<CachedProduct[]>([]);
@@ -96,7 +98,7 @@ export const ReplenishmentPage: React.FC = () => {
 
   const handleSendTelegramText = async () => {
     if (selectedProducts.length === 0) {
-      alert('Selecione pelo menos um produto da lista.');
+      toast('info', 'Selecione pelo menos um produto da lista.');
       return;
     }
     setSendingTelegram(true);
@@ -105,9 +107,9 @@ export const ReplenishmentPage: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({ text: simpleTextReport }),
       });
-      alert('Lista de produtos enviada para o Telegram!');
+      toast('ok', 'Lista de produtos enviada para o Telegram!');
     } catch (err: any) {
-      alert(err.message || 'Erro ao enviar para o Telegram.');
+      toast('err', err.message || 'Erro ao enviar para o Telegram.');
     } finally {
       setSendingTelegram(false);
     }
@@ -115,7 +117,7 @@ export const ReplenishmentPage: React.FC = () => {
 
   const handleExportSelectedPDF = () => {
     if (selectedProducts.length === 0) {
-      alert('Selecione pelo menos um produto para gerar o PDF.');
+      toast('info', 'Selecione pelo menos um produto para gerar o PDF.');
       return;
     }
     const pdfRows = selectedProducts.map((p, idx) => ({
@@ -127,12 +129,17 @@ export const ReplenishmentPage: React.FC = () => {
       Situação: quickStatus,
       Loja: selectedStoreName,
     }));
-    exportToPDF(pdfRows, `${quickStatus} — ${selectedStoreName}`, 'conferencia_produtos');
+    const ok = exportToPDF(pdfRows, `${quickStatus} — ${selectedStoreName}`, 'conferencia_produtos');
+    if (ok) toast('ok', 'PDF gerado com sucesso!');
   };
 
   const handleCopyText = async () => {
-    await navigator.clipboard.writeText(simpleTextReport);
-    alert('Texto copiado para a área de transferência!');
+    try {
+      await navigator.clipboard.writeText(simpleTextReport);
+      toast('ok', 'Texto copiado para a área de transferência!');
+    } catch {
+      toast('err', 'Não foi possível copiar para a área de transferência.');
+    }
   };
 
   const handleBarcode = async (ean: string) => {
@@ -142,11 +149,12 @@ export const ReplenishmentPage: React.FC = () => {
       if (matched.length > 0) {
         setForm((f) => ({ ...f, product_id: String(matched[0].id) }));
         if (!selectedIds.includes(matched[0].id)) setSelectedIds((prev) => [...prev, matched[0].id]);
+        toast('ok', `Produto identificado: ${matched[0].name}`);
       } else {
-        alert(`Produto com EAN ${ean} não encontrado na SI5.`);
+        toast('err', `Produto com EAN ${ean} não encontrado na SI5.`);
       }
     } catch (err: any) {
-      alert(err.message || `Produto com EAN ${ean} não encontrado na SI5.`);
+      toast('err', err.message || `Produto com EAN ${ean} não encontrado na SI5.`);
     }
   };
 
@@ -157,9 +165,10 @@ export const ReplenishmentPage: React.FC = () => {
     try {
       const { matched, allProducts } = await searchOrResolveSi5WithDeviceCache(q, products);
       setProducts(allProducts);
-      if (matched.length === 0) alert(`Nenhum produto encontrado na SI5 para "${q}".`);
+      if (matched.length === 0) toast('info', `Nenhum produto encontrado na SI5 para "${q}".`);
+      else toast('ok', `${matched.length} produto(s) carregado(s) da SI5.`);
     } catch (err: any) {
-      alert(err.message || 'Erro ao consultar SI5.');
+      toast('err', err.message || 'Erro ao consultar SI5.');
     } finally {
       setSearchingSi5Quick(false);
     }

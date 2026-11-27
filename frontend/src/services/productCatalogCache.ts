@@ -1,23 +1,13 @@
 import { apiFetch } from './api';
+import {
+  clearCatalogAndSearchCaches,
+  getCatalogRecord,
+  setCatalogRecord,
+} from './offlineDb';
 
-const CATALOG_KEY = 'merchpro_si5_catalog_v3';
-const CATALOG_SYNC_AT_KEY = 'merchpro_si5_catalog_synced_at_v3';
-const SEARCH_CACHE_KEY = 'merchpro_si5_search_cache_v3';
-
-export function clearAllSearchAndCatalogCache() {
-  try {
-    const keysToRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && (k.startsWith('merchpro_si5_') || k.startsWith('merchpro_cache_'))) {
-        keysToRemove.push(k);
-      }
-    }
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
-  } catch {
-    // ignore
-  }
-}
+const CATALOG_STORE_KEY = 'si5_catalog_v4';
+const SEARCH_CACHE_STORE_KEY = 'si5_search_cache_v4';
+const LEGACY_CATALOG_KEY = 'merchpro_si5_catalog_v3';
 
 export interface CachedProduct {
   id: number;
@@ -37,26 +27,34 @@ export interface CachedProduct {
   si5_raw?: any;
 }
 
+let memoryCatalog: CachedProduct[] = [];
+let memorySyncedAt: string | null = null;
+let memorySearchCache: Record<string, number[]> = {};
+
+export function clearAllSearchAndCatalogCache() {
+  memoryCatalog = [];
+  memorySyncedAt = null;
+  memorySearchCache = {};
+  void clearCatalogAndSearchCaches();
+}
+
 export function getDeviceCatalog(): CachedProduct[] {
-  try {
-    const raw = localStorage.getItem(CATALOG_KEY);
-    const list: CachedProduct[] = raw ? JSON.parse(raw) : [];
-    return list.filter((p) => p.ean && p.ean !== 'A CONFERIR');
-  } catch {
-    return [];
-  }
+  return memoryCatalog.filter((p) => p.ean && p.ean !== 'A CONFERIR');
 }
 
 export function getDeviceCatalogSyncedAt(): string | null {
-  return localStorage.getItem(CATALOG_SYNC_AT_KEY);
+  return memorySyncedAt;
 }
 
 export function saveDeviceCatalog(products: CachedProduct[]) {
+  const clean = products.filter((p) => p.ean && p.ean !== 'A CONFERIR');
+  memoryCatalog = clean;
+  memorySyncedAt = new Date().toISOString();
+  void setCatalogRecord(CATALOG_STORE_KEY, clean);
   try {
-    localStorage.setItem(CATALOG_KEY, JSON.stringify(products));
-    localStorage.setItem(CATALOG_SYNC_AT_KEY, new Date().toISOString());
+    localStorage.removeItem(LEGACY_CATALOG_KEY);
   } catch {
-    // ignore storage quota errors
+    // ignore
   }
 }
 
@@ -72,14 +70,32 @@ export function upsertProductsInDeviceCache(newProducts: CachedProduct[]): Cache
 }
 
 /**
- * Carrega o catálogo priorizando o cache salvo no dispositivo para não gastar tokens da SI5 à toa.
- * Só busca no servidor se o cache do dispositivo estiver vazio ou se forceServer=true.
+ * Carrega o catálogo priorizando IndexedDB (sem estourar a cota de 5MB do localStorage).
  */
 export async function loadProductsWithDeviceCache(forceServer = false): Promise<CachedProduct[]> {
-  const cached = getDeviceCatalog();
-  if (!forceServer && cached.length > 0) {
-    return cached;
+  if (!forceServer) {
+    if (memoryCatalog.length > 0) return getDeviceCatalog();
+    const idbRec = await getCatalogRecord<CachedProduct[]>(CATALOG_STORE_KEY);
+    if (idbRec && Array.isArray(idbRec.data) && idbRec.data.length > 0) {
+      memoryCatalog = idbRec.data;
+      memorySyncedAt = idbRec.updatedAt;
+      return getDeviceCatalog();
+    }
+    // Migrar cache legado do localStorage se existir
+    try {
+      const legacy = localStorage.getItem(LEGACY_CATALOG_KEY);
+      if (legacy) {
+        const parsed: CachedProduct[] = JSON.parse(legacy);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          saveDeviceCatalog(parsed);
+          return getDeviceCatalog();
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
+
   const fresh = await apiFetch<CachedProduct[]>('/products');
   if (Array.isArray(fresh) && fresh.length > 0) {
     saveDeviceCatalog(fresh);
@@ -87,11 +103,9 @@ export async function loadProductsWithDeviceCache(forceServer = false): Promise<
   return fresh || [];
 }
 
-/**
- * Puxada completa explícita da API SI5 Global (todas as páginas), salvando no banco de dados e no dispositivo.
- * Só é executada quando o usuário solicita explicitamente.
- */
-export async function syncFullCatalogFromSi5(query = ''): Promise<{ products: CachedProduct[]; inserted: number; updated: number; pages_fetched: number }> {
+export async function syncFullCatalogFromSi5(
+  query = ''
+): Promise<{ products: CachedProduct[]; inserted: number; updated: number; pages_fetched: number }> {
   const res = await apiFetch<{ inserted: number; updated: number; pages_fetched: number }>('/si5/full-pull', {
     method: 'POST',
     body: JSON.stringify({ q: query }),
@@ -106,13 +120,16 @@ export async function syncFullCatalogFromSi5(query = ''): Promise<{ products: Ca
   };
 }
 
-/**
- * Importa gratuitamente todo o catálogo PepsiCo a partir do Open Food Facts e salva no banco e no dispositivo.
- */
-export async function pullPepsicoFromOpenFoodFacts(): Promise<{ products: CachedProduct[]; inserted: number; updated: number; brands_processed: number }> {
-  const res = await apiFetch<{ inserted: number; updated: number; brands_processed: number }>('/openfoodfacts/pull-pepsico', {
-    method: 'POST',
-  });
+export async function pullPepsicoFromOpenFoodFacts(): Promise<{
+  products: CachedProduct[];
+  inserted: number;
+  updated: number;
+  brands_processed: number;
+}> {
+  const res = await apiFetch<{ inserted: number; updated: number; brands_processed: number }>(
+    '/openfoodfacts/pull-pepsico',
+    { method: 'POST' }
+  );
   const all = await apiFetch<CachedProduct[]>('/products');
   saveDeviceCatalog(all);
   return {
@@ -123,10 +140,6 @@ export async function pullPepsicoFromOpenFoodFacts(): Promise<{ products: Cached
   };
 }
 
-/**
- * Busca por nome ou EAN: verifica primeiro no cache do dispositivo e no histórico de buscas;
- * só consulta a API SI5 se não estiver salvo localmente, salvando o retorno completo no dispositivo.
- */
 export async function searchOrResolveSi5WithDeviceCache(
   query: string,
   currentProducts: CachedProduct[]
@@ -134,7 +147,6 @@ export async function searchOrResolveSi5WithDeviceCache(
   const q = query.trim();
   const qLower = q.toLowerCase();
 
-  // 1. Verificar se já existe no dispositivo por EAN exato
   if (/^\d{8,14}$/.test(q)) {
     const exactLocal = currentProducts.find((p) => p.ean === q || p.sku === q);
     if (exactLocal) {
@@ -142,21 +154,19 @@ export async function searchOrResolveSi5WithDeviceCache(
     }
   }
 
-  // 2. Verificar cache de buscas anteriores no dispositivo para não repetir chamadas à SI5
-  try {
-    const searchCache: Record<string, number[]> = JSON.parse(localStorage.getItem(SEARCH_CACHE_KEY) || '{}');
-    if (searchCache[qLower]?.length) {
-      const ids = new Set(searchCache[qLower]);
-      const localMatches = currentProducts.filter((p) => ids.has(p.id));
-      if (localMatches.length > 0) {
-        return { matched: localMatches, allProducts: currentProducts, fromCache: true };
-      }
-    }
-  } catch {
-    // ignore
+  if (Object.keys(memorySearchCache).length === 0) {
+    const rec = await getCatalogRecord<Record<string, number[]>>(SEARCH_CACHE_STORE_KEY);
+    if (rec?.data) memorySearchCache = rec.data;
   }
 
-  // 3. Consultar na API SI5 via backend (que também persiste tudo no MongoDB)
+  if (memorySearchCache[qLower]?.length) {
+    const ids = new Set(memorySearchCache[qLower]);
+    const localMatches = currentProducts.filter((p) => ids.has(p.id));
+    if (localMatches.length > 0) {
+      return { matched: localMatches, allProducts: currentProducts, fromCache: true };
+    }
+  }
+
   const res = await apiFetch<{ products: CachedProduct[] }>('/si5/search-and-cache', {
     method: 'POST',
     body: JSON.stringify({ q, per_page: 20 }),
@@ -165,15 +175,9 @@ export async function searchOrResolveSi5WithDeviceCache(
   const returned = res.products || [];
   const updatedCatalog = upsertProductsInDeviceCache(returned);
 
-  // Salvar índice da busca no dispositivo
   if (returned.length > 0) {
-    try {
-      const searchCache: Record<string, number[]> = JSON.parse(localStorage.getItem(SEARCH_CACHE_KEY) || '{}');
-      searchCache[qLower] = returned.map((p) => p.id);
-      localStorage.setItem(SEARCH_CACHE_KEY, JSON.stringify(searchCache));
-    } catch {
-      // ignore
-    }
+    memorySearchCache = { ...memorySearchCache, [qLower]: returned.map((p) => p.id) };
+    void setCatalogRecord(SEARCH_CACHE_STORE_KEY, memorySearchCache);
   }
 
   return { matched: returned, allProducts: updatedCatalog, fromCache: false };

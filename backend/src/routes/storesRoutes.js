@@ -2,9 +2,10 @@ const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
-const { authenticate, logAudit } = require('../middleware/auth');
-const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
+const { authenticate, authorize, logAudit } = require('../middleware/auth');
+const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
+const { canOperateVisit, parseUtcTimestamp } = require('../utils/security');
 
 const router = express.Router();
 router.use(authenticate);
@@ -17,7 +18,7 @@ router.get('/stores', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/stores', async (req, res, next) => {
+router.post('/stores', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { name, type, banner, network, address, city, region, route_name, visit_frequency, contact_name, contact_phone } = req.body || {};
     if (!name || !address) return res.status(400).json({ error: 'Nome e endereço da loja são obrigatórios.' });
@@ -45,7 +46,7 @@ router.post('/stores', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.put('/stores/:id', async (req, res, next) => {
+router.put('/stores/:id', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const sid = Number(req.params.id);
     const stores = await col('stores');
@@ -79,17 +80,20 @@ router.get('/stores/:id/history', async (req, res, next) => {
     const store = await (await col('stores')).findOne({ id: sid }, { projection: { _id: 0 } });
     if (!store) return res.status(404).json({ error: 'Loja não encontrada.' });
 
-    const users = await (await col('users')).find({}).toArray();
+    const [users, products, visitsRaw, occurrences, replenishmentsRaw, displays] = await Promise.all([
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+      (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+      (await col('visits')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ scheduled_date: -1, id: -1 }).limit(30).toArray(),
+      (await col('occurrences')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray(),
+      (await col('replenishments')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray(),
+      (await col('displays_exposures')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(20).toArray(),
+    ]);
+
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
-    const products = await (await col('products')).find({}).toArray();
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p.name]));
 
-    const visits = (await (await col('visits')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ scheduled_date: -1, id: -1 }).limit(30).toArray())
-      .map((v) => ({ ...v, promoter_name: userMap[v.promoter_id] || 'Promotor' }));
-    const occurrences = await (await col('occurrences')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray();
-    const replenishments = (await (await col('replenishments')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(30).toArray())
-      .map((r) => ({ ...r, product_name: prodMap[r.product_id] || '-' }));
-    const displays = await (await col('displays_exposures')).find({ store_id: sid }, { projection: { _id: 0 } }).sort({ id: -1 }).limit(20).toArray();
+    const visits = visitsRaw.map((v) => ({ ...v, promoter_name: userMap[v.promoter_id] || 'Promotor' }));
+    const replenishments = replenishmentsRaw.map((r) => ({ ...r, product_name: prodMap[r.product_id] || '-' }));
 
     res.json({ store, visits, occurrences, replenishments, displays });
   } catch (err) { next(err); }
@@ -98,15 +102,17 @@ router.get('/stores/:id/history', async (req, res, next) => {
 // --- ROUTES ---
 router.get('/routes', async (_req, res, next) => {
   try {
-    const users = await (await col('users')).find({}).toArray();
+    const [users, routesRaw] = await Promise.all([
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+      (await col('routes')).find({}, { projection: { _id: 0 } }).sort({ day_of_week: 1, name: 1 }).toArray(),
+    ]);
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
-    const routes = (await (await col('routes')).find({}, { projection: { _id: 0 } }).sort({ day_of_week: 1, name: 1 }).toArray())
-      .map((r) => ({ ...r, promoter_name: userMap[r.promoter_id] || '' }));
+    const routes = routesRaw.map((r) => ({ ...r, promoter_name: userMap[r.promoter_id] || '' }));
     res.json(routes);
   } catch (err) { next(err); }
 });
 
-router.post('/routes', async (req, res, next) => {
+router.post('/routes', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { name, region, promoter_id, day_of_week, store_ids, notes } = req.body || {};
     if (!name || !day_of_week) return res.status(400).json({ error: 'Nome da rota e dia da semana são obrigatórios.' });
@@ -139,17 +145,24 @@ router.get('/visits', async (req, res, next) => {
 
     const [visits, stores, users, checklists] = await Promise.all([
       (await col('visits')).find(filter, { projection: { _id: 0 } }).sort({ scheduled_date: -1, scheduled_time: 1 }).toArray(),
-      (await col('stores')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
-      (await col('visit_checklists')).find({}).toArray(),
+      (await col('stores')).find({}, { projection: { _id: 0, id: 1, name: 1, type: 1, address: 1, region: 1 } }).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+      (await col('visit_checklists')).find({}, { projection: { _id: 0, visit_id: 1, completed: 1 } }).toArray(),
     ]);
 
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+    const checkMap = new Map();
+    for (const c of checklists) {
+      const curr = checkMap.get(c.visit_id) || { total: 0, done: 0 };
+      curr.total++;
+      if (c.completed) curr.done++;
+      checkMap.set(c.visit_id, curr);
+    }
 
     const enriched = visits.map((v) => {
       const s = storeMap[v.store_id] || {};
-      const items = checklists.filter((c) => c.visit_id === v.id);
+      const chk = checkMap.get(v.id) || { total: 0, done: 0 };
       return {
         ...v,
         store_name: s.name || '-',
@@ -157,8 +170,8 @@ router.get('/visits', async (req, res, next) => {
         store_address: s.address || '-',
         store_region: s.region || '-',
         promoter_name: userMap[v.promoter_id] || '-',
-        checklist_total: items.length,
-        checklist_done: items.filter((i) => i.completed).length,
+        checklist_total: chk.total,
+        checklist_done: chk.done,
       };
     });
     res.json(enriched);
@@ -170,11 +183,14 @@ router.post('/visits', async (req, res, next) => {
     const { store_id, promoter_id, route_id, scheduled_date, scheduled_time, notes } = req.body || {};
     if (!store_id || !scheduled_date) return res.status(400).json({ error: 'Loja e data são obrigatórias.' });
 
+    const assignedPromoterId =
+      req.user.role === 'promotor' ? req.user.id : Number(promoter_id || req.user.id);
+
     const id = await nextId('visits');
     const doc = {
       id,
       store_id: Number(store_id),
-      promoter_id: Number(promoter_id || req.user.id),
+      promoter_id: assignedPromoterId,
       route_id: route_id ? Number(route_id) : null,
       scheduled_date,
       scheduled_time: scheduled_time || '08:00',
@@ -182,6 +198,7 @@ router.post('/visits', async (req, res, next) => {
       checkout_at: null,
       duration_minutes: 0,
       status: 'Pendente',
+      workflow_stage: 'IDENTIFICACAO',
       checkin_lat: null,
       checkin_lng: null,
       notes: notes || '',
@@ -203,6 +220,9 @@ router.post('/visits/:id/checkin', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para operar a visita de outro promotor.' });
+    }
     if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
       return res.status(403).json({ error: 'Visita já encerrada não pode receber novo check-in.' });
     }
@@ -250,6 +270,9 @@ router.post('/visits/:id/checkout', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para finalizar a visita de outro promotor.' });
+    }
     if (visit.status === 'Concluída') {
       return res.status(403).json({ error: 'Esta visita já foi finalizada e não pode ser alterada.' });
     }
@@ -257,14 +280,18 @@ router.post('/visits/:id/checkout', async (req, res, next) => {
       return res.status(403).json({ error: 'Visita cancelada não pode receber check-out.' });
     }
 
-    // Regra obrigatória: exigir fotografia inicial, diagnóstico e fotografia final antes de concluir
+    // Regra obrigatória: exigir selfie na entrada, fotografia inicial, diagnóstico e fotografia final
     const evidencesCol = await col('visit_evidences');
-    const [initialCount, finalCount, diag] = await Promise.all([
+    const [selfieCount, initialCount, finalCount, diag] = await Promise.all([
+      evidencesCol.countDocuments({ visit_id: vid, stage: 'SELFIE_ENTRADA', is_active: { $ne: 0 } }),
       evidencesCol.countDocuments({ visit_id: vid, stage: 'INICIAL', is_active: { $ne: 0 } }),
       evidencesCol.countDocuments({ visit_id: vid, stage: 'FINAL', is_active: { $ne: 0 } }),
       (await col('visit_diagnostics')).findOne({ visit_id: vid }),
     ]);
 
+    if (selfieCount < 1) {
+      return res.status(400).json({ error: 'Check-out bloqueado: selfie em frente ao estabelecimento não registrada.' });
+    }
     if (initialCount < 1) {
       return res.status(400).json({ error: 'Check-out bloqueado: fotografia inicial obrigatória não registrada.' });
     }
@@ -279,9 +306,9 @@ router.post('/visits/:id/checkout', async (req, res, next) => {
 
     const nowDate = new Date();
     let duration = 1;
-    if (visit.checkin_at) {
-      const start = new Date(visit.checkin_at.replace(' ', 'T'));
-      const diff = Math.round((nowDate - start) / 60000);
+    const start = parseUtcTimestamp(visit.checkin_at);
+    if (start) {
+      const diff = Math.round((nowDate.getTime() - start.getTime()) / 60000);
       if (!Number.isNaN(diff) && diff >= 1) duration = diff;
     }
 
@@ -316,6 +343,15 @@ router.post('/visits/:id/cancel', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para cancelar a visita de outro promotor.' });
+    }
+    if (visit.status === 'Concluída') {
+      return res.status(403).json({ error: 'Visita já concluída não pode ser cancelada.' });
+    }
+    if (visit.status === 'Cancelada') {
+      return res.status(400).json({ error: 'Esta visita já está cancelada.' });
+    }
 
     const { reason } = req.body || {};
     const cancelNote = reason ? `Cancelada: ${reason}` : 'Visita cancelada pelo usuário';
@@ -323,7 +359,7 @@ router.post('/visits/:id/cancel', async (req, res, next) => {
 
     await visitsCol.updateOne(
       { id: vid },
-      { $set: { status: 'Cancelada', notes: newNotes } }
+      { $set: { status: 'Cancelada', workflow_stage: 'CANCELADA', notes: newNotes } }
     );
     await logAudit(req.user, 'CANCEL', 'visits', vid, cancelNote);
     res.json(await visitsCol.findOne({ id: vid }, { projection: { _id: 0 } }));
@@ -336,6 +372,12 @@ router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next)
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para anexar fotos nesta visita.' });
+    }
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Não é permitido anexar fotos em uma visita encerrada.' });
+    }
     if (!req.file) return res.status(400).json({ error: 'Nenhuma foto enviada.' });
 
     const store = await (await col('stores')).findOne({ id: visit.store_id });
@@ -354,7 +396,11 @@ router.post('/visits/:id/photos', upload.single('photo'), async (req, res, next)
     });
 
     res.json({ photoUrl, photos });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
+  }
 });
 
 router.get('/visits/:id/checklist', async (req, res, next) => {
@@ -371,6 +417,15 @@ router.patch('/visits/:id/checklist/:itemId', async (req, res, next) => {
   try {
     const vid = Number(req.params.id);
     const itemId = Number(req.params.itemId);
+    const visit = await (await col('visits')).findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para alterar o checklist desta visita.' });
+    }
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Checklist de visita encerrada não pode ser alterado.' });
+    }
+
     const { completed, notes } = req.body || {};
     const checkCol = await col('visit_checklists');
     const update = { completed: completed ? 1 : 0, updated_at: nowStr() };
@@ -383,6 +438,15 @@ router.patch('/visits/:id/checklist/:itemId', async (req, res, next) => {
 router.post('/visits/:id/checklist', async (req, res, next) => {
   try {
     const vid = Number(req.params.id);
+    const visit = await (await col('visits')).findOne({ id: vid });
+    if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para alterar o checklist desta visita.' });
+    }
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Checklist de visita encerrada não pode ser alterado.' });
+    }
+
     const { label } = req.body || {};
     if (!label) return res.status(400).json({ error: 'Descrição do item é obrigatória.' });
     const checkCol = await col('visit_checklists');

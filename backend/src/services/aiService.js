@@ -1,82 +1,198 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const { col } = require('../db/database');
 
-async function analyzeShelfImage({ storeId, imagePath, notes }) {
-  const storesCol = await col('stores');
-  const productsCol = await col('products');
-  const brandsCol = await col('brands');
-  const repCol = await col('replenishments');
-  const occCol = await col('occurrences');
+const DEFAULT_GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
-  const store = storeId ? await storesCol.findOne({ id: Number(storeId) }) : null;
-  const products = await productsCol.find({ active: 1 }).toArray();
-  const brands = await brandsCol.find({}).toArray();
-  const brandMap = Object.fromEntries(brands.map((b) => [b.id, b]));
+function detectMimeType(imagePath) {
+  const ext = path.extname(imagePath || '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/jpeg';
+}
 
-  const recentReplenishments = storeId
-    ? await repCol.find({ store_id: Number(storeId) }).sort({ id: -1 }).limit(10).toArray()
+function buildVisionPrompt({ storeLabel, ownBrands, notes, openIssues }) {
+  return [
+    'Você é um auditor sênior de trade marketing e merchandising de varejo no Brasil (foco em marcas PepsiCo: Doritos, Cheetos, Ruffles, Lay’s, Fandangos, Pepsi, Gatorade, H2OH!, Quaker, Toddy, Toddynho, Torcida, Kero Coco, Lipton).',
+    `Contexto: Loja "${storeLabel}".`,
+    ownBrands.length ? `Marcas cadastradas: ${ownBrands.slice(0, 12).join(', ')}.` : null,
+    openIssues.length ? `Ocorrências abertas na loja: ${openIssues.slice(0, 5).join('; ')}.` : null,
+    notes ? `Observação do promotor: "${String(notes).slice(0, 300)}".` : null,
+    'Analise SOMENTE o que é visível na fotografia da gôndola e responda exclusivamente em JSON válido (sem markdown) no formato exato:',
+    '{"detected_ruptures":["string"],"detected_brands":[{"brand":"string","facings":4,"confidence":85}],"exposure_issues":["string"],"planogram_score":80,"suggestions":["string"],"extra_point_opportunities":["string"],"auto_report":"resumo objetivo em português (máx 2 frases)","confidence":85}',
+    'Regras: seja honesto se a imagem estiver escura/borrada (reduza confidence); números entre 0 e 100 para planogram_score e confidence; arrays curtos e objetivos (máx 4 itens cada).',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function normalizeVisionPayload(parsed, fallbackReport) {
+  const toStrArray = (arr, fallback = []) =>
+    Array.isArray(arr) ? arr.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8) : fallback;
+
+  const detectedBrands = Array.isArray(parsed?.detected_brands)
+    ? parsed.detected_brands
+        .filter((b) => b && b.brand)
+        .map((b) => ({
+          brand: String(b.brand).trim(),
+          facings: Math.max(0, Math.round(Number(b.facings || 0))),
+          confidence: Math.min(100, Math.max(0, Number(Number(b.confidence || 75).toFixed(1)))),
+        }))
+        .slice(0, 10)
     : [];
-  const recentOccurrences = storeId
-    ? await occCol.find({ store_id: Number(storeId), status: { $ne: 'Resolvida' } }).sort({ id: -1 }).limit(10).toArray()
-    : [];
 
-  let fileSizeKb = 120;
-  if (imagePath && fs.existsSync(imagePath)) {
-    const stats = fs.statSync(imagePath);
-    fileSizeKb = Math.max(10, Math.round(stats.size / 1024));
+  const planogramScore = Math.min(100, Math.max(0, Number(Number(parsed?.planogram_score ?? 75).toFixed(1))));
+  const confidence = Math.min(100, Math.max(0, Number(Number(parsed?.confidence ?? 75).toFixed(1))));
+
+  return {
+    detected_ruptures: toStrArray(parsed?.detected_ruptures, ['Nenhuma ruptura evidente detectada na imagem.']),
+    detected_brands: detectedBrands,
+    exposure_issues: toStrArray(parsed?.exposure_issues, ['Sem desvios graves de exposição identificados.']),
+    planogram_score: Number.isNaN(planogramScore) ? 75 : planogramScore,
+    suggestions: toStrArray(parsed?.suggestions, ['Manter frenteamento e conferência de etiquetas de preço.']),
+    extra_point_opportunities: toStrArray(parsed?.extra_point_opportunities, []),
+    auto_report: String(parsed?.auto_report || fallbackReport).trim(),
+    confidence: Number.isNaN(confidence) ? 75 : confidence,
+  };
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error('Resposta vazia do modelo de visão.');
+  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('JSON não encontrado na resposta do modelo.');
+  }
+  return JSON.parse(stripped.slice(start, end + 1));
+}
+
+async function analyzeWithGroqVision({ imagePath, prompt }) {
+  const apiKey = (process.env.GROQ_API_KEY || '').trim();
+  if (!apiKey || !imagePath || !fs.existsSync(imagePath)) return null;
+
+  const model = (process.env.GROQ_VISION_MODEL || DEFAULT_GROQ_VISION_MODEL).trim();
+  const mime = detectMimeType(imagePath);
+  const base64 = (await fs.promises.readFile(imagePath)).toString('base64');
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
+          ],
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(25000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Groq Vision HTTP ${res.status}: ${errText.slice(0, 200)}`);
   }
 
-  const baseConfidence = imagePath ? Math.min(96.5, 78 + (fileSizeKb % 18)) : 82.0;
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  const parsed = extractJsonObject(content);
+  return { parsed, model };
+}
 
+async function analyzeWithGeminiVision({ imagePath, prompt }) {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey || !imagePath || !fs.existsSync(imagePath)) return null;
+
+  const model = (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
+  const mime = detectMimeType(imagePath);
+  const base64 = (await fs.promises.readFile(imagePath)).toString('base64');
+
+  const { GoogleGenAI } = require('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mime, data: base64 } },
+        ],
+      },
+    ],
+    config: {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+    },
+  });
+
+  const parsed = extractJsonObject(response?.text);
+  return { parsed, model };
+}
+
+function buildHeuristicFallback({ storeLabel, products, brandMap, recentReplenishments, recentOccurrences, notes, fallbackReason }) {
   const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
   const ruptures = recentReplenishments
     .filter((r) => r.status === 'Ruptura' || r.status === 'Indisponível')
     .map((r) => {
       const p = prodMap[r.product_id];
       const b = p ? brandMap[p.brand_id] : null;
-      return `Possível ruptura visual de ${p?.name || `Produto #${r.product_id}`} (${b?.name || 'PepsiCo'})`;
+      return `Ruptura registrada no histórico da loja: ${p?.name || `Produto #${r.product_id}`} (${b?.name || 'PepsiCo'})`;
     });
 
   if (ruptures.length === 0) {
-    ruptures.push('Espaço vazio detectado na prateleira intermediária (estimativa: 1-2 frentes sem reposição)');
+    ruptures.push('Sem rupturas recentes registradas no histórico — confirme visualmente na gôndola.');
   }
 
   const ownBrands = [...new Set(products.map((p) => brandMap[p.brand_id]?.name).filter(Boolean))].slice(0, 4);
-  const detectedBrands = ownBrands.map((brand, idx) => ({
+  const detectedBrands = ownBrands.map((brand) => ({
     brand,
-    facings: 4 + ((fileSizeKb + idx * 3) % 5),
-    confidence: Number((baseConfidence - idx * 2.1).toFixed(1)),
+    facings: 0,
+    confidence: 0,
   }));
-  detectedBrands.push({
-    brand: 'Concorrente na Categoria',
-    facings: 5 + (fileSizeKb % 4),
-    confidence: Number((baseConfidence - 4.5).toFixed(1)),
-  });
 
   const exposureIssues = [];
   if (recentOccurrences.some((o) => o.type === 'Falta de Preço')) {
-    exposureIssues.push('Etiqueta de preço ausente ou pouco visível em item prioritário');
+    exposureIssues.push('Histórico aponta etiqueta de preço ausente em item prioritário da loja.');
   }
-  exposureIssues.push('Alinhamento frontal (frenteamento) irregular no bloco central da gôndola');
   if (notes && notes.toLowerCase().includes('concorrente')) {
-    exposureIssues.push('Invasão de espaço por marca concorrente identificada na observação');
+    exposureIssues.push('Observação do promotor indica pressão/espaço ocupado por concorrente.');
+  }
+  if (exposureIssues.length === 0) {
+    exposureIssues.push('Verifique frenteamento, etiquetas de preço e alinhamento ao planograma.');
   }
 
-  const planogramScore = Number(Math.max(62, Math.min(97, 89 - ruptures.length * 4 + (fileSizeKb % 7))).toFixed(1));
+  const penalty = Math.min(35, ruptures.length * 6 + recentOccurrences.length * 3);
+  const planogramScore = Number(Math.max(50, 90 - penalty).toFixed(1));
+
   const suggestions = [
-    'Realizar frenteamento imediato puxando os produtos para a borda da prateleira',
+    'Realizar frenteamento puxando os produtos para a borda da prateleira',
     'Confirmar etiqueta de preço e aplicar faixa de gôndola oficial',
-    'Avaliar redistribuição de 1 frente adicional para os SKUs de maior giro',
+    'Validar estoque de retaguarda para itens com baixo giro/ruptura',
   ];
   const extraPointOpportunities = [
-    `Espaço potencial para ilha ou display próximo ao corredor principal (${store ? store.name : 'PDV'})`,
-    'Oportunidade de cross-merchandising no checkout para itens de impulso',
+    `Avaliar ponto extra ou display próximo ao corredor principal (${storeLabel})`,
+    'Verificar oportunidade de cross-merchandising no checkout para itens de impulso',
   ];
 
-  const storeLabel = store ? `${store.name} (${store.type})` : 'Loja selecionada';
-  const autoReport = `Análise automática de gôndola em ${storeLabel}: Aderência estimada ao planograma de ${planogramScore}%. ` +
-    `Foram identificadas ${ruptures.length} possível(is) ruptura(s) e ${exposureIssues.length} ponto(s) de melhoria na exposição. ` +
-    `Validação humana necessária para confirmar frentes e ações corretivas.`;
+  const reasonNote = fallbackReason ? ` (${fallbackReason})` : '';
+  const autoReport =
+    `[Modo Heurístico — sem visão computacional ativa${reasonNote}] ` +
+    `Resumo baseado no histórico de ${storeLabel}: ${recentOccurrences.length} ocorrência(s) em aberto. ` +
+    `Configure GROQ_API_KEY ou GEMINI_API_KEY para análise visual real da fotografia.`;
 
   return {
     detected_ruptures: ruptures,
@@ -86,8 +202,86 @@ async function analyzeShelfImage({ storeId, imagePath, notes }) {
     suggestions,
     extra_point_opportunities: extraPointOpportunities,
     auto_report: autoReport,
-    confidence: Number(baseConfidence.toFixed(1)),
+    confidence: 0,
+    analysis_mode: 'heuristic_fallback',
+    model_used: 'heuristic-history-v1',
   };
+}
+
+async function analyzeShelfImage({ storeId, imagePath, notes }) {
+  const storesCol = await col('stores');
+  const productsCol = await col('products');
+  const brandsCol = await col('brands');
+  const repCol = await col('replenishments');
+  const occCol = await col('occurrences');
+
+  const [store, products, brands, recentReplenishments, recentOccurrences] = await Promise.all([
+    storeId ? storesCol.findOne({ id: Number(storeId) }) : Promise.resolve(null),
+    productsCol.find({ active: 1 }, { projection: { _id: 0, id: 1, name: 1, brand_id: 1 } }).toArray(),
+    brandsCol.find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+    storeId ? repCol.find({ store_id: Number(storeId) }).sort({ id: -1 }).limit(10).toArray() : Promise.resolve([]),
+    storeId
+      ? occCol.find({ store_id: Number(storeId), status: { $ne: 'Resolvida' } }).sort({ id: -1 }).limit(10).toArray()
+      : Promise.resolve([]),
+  ]);
+
+  const brandMap = Object.fromEntries(brands.map((b) => [b.id, b]));
+  const ownBrands = [...new Set(products.map((p) => brandMap[p.brand_id]?.name).filter(Boolean))];
+  const storeLabel = store ? `${store.name} (${store.type})` : 'Loja selecionada';
+  const openIssues = recentOccurrences.map((o) => `${o.type}: ${o.description}`);
+
+  let fallbackReason = '';
+
+  if (imagePath && fs.existsSync(imagePath)) {
+    const prompt = buildVisionPrompt({ storeLabel, ownBrands, notes, openIssues });
+
+    // 1. Prioridade: Groq Vision (plano gratuito, ultrarrápido)
+    if ((process.env.GROQ_API_KEY || '').trim()) {
+      try {
+        const res = await analyzeWithGroqVision({ imagePath, prompt });
+        if (res?.parsed) {
+          return {
+            ...normalizeVisionPayload(res.parsed, `Análise visual concluída para ${storeLabel}.`),
+            analysis_mode: 'groq_vision',
+            model_used: res.model,
+          };
+        }
+      } catch (err) {
+        console.error('Groq Vision erro (tentando próximo provedor):', err.message);
+        fallbackReason = 'falha temporária no Groq Vision';
+      }
+    }
+
+    // 2. Fallback gratuito: Google Gemini Vision
+    if ((process.env.GEMINI_API_KEY || '').trim()) {
+      try {
+        const res = await analyzeWithGeminiVision({ imagePath, prompt });
+        if (res?.parsed) {
+          return {
+            ...normalizeVisionPayload(res.parsed, `Análise visual concluída para ${storeLabel}.`),
+            analysis_mode: 'gemini_vision',
+            model_used: res.model,
+          };
+        }
+      } catch (err) {
+        console.error('Gemini Vision erro (usando fallback heurístico):', err.message);
+        fallbackReason = fallbackReason ? 'falha no Groq e Gemini Vision' : 'falha temporária no Gemini Vision';
+      }
+    }
+  } else {
+    fallbackReason = 'nenhuma imagem enviada';
+  }
+
+  // 3. Fallback Heurístico transparente (sempre rotulado)
+  return buildHeuristicFallback({
+    storeLabel,
+    products,
+    brandMap,
+    recentReplenishments,
+    recentOccurrences,
+    notes,
+    fallbackReason,
+  });
 }
 
 async function generateStoreSummary(storeId) {
@@ -95,14 +289,16 @@ async function generateStoreSummary(storeId) {
   const store = await (await col('stores')).findOne({ id: sid });
   if (!store) return null;
 
-  const openOccurrences = await (await col('occurrences'))
-    .find({ store_id: sid, status: { $ne: 'Resolvida' } })
-    .toArray();
-  const priceIssues = await (await col('price_checks'))
-    .countDocuments({ store_id: sid, $or: [{ has_price_tag: 0 }, { price_divergent: 1 }] });
-  const expiryAlerts = await (await col('expiry_checks'))
-    .countDocuments({ store_id: sid, condition: { $in: ['Próximo Vencimento', 'Vencido', 'Avaria', 'Embalagem Danificada'] } });
-  const audits = await (await col('planogram_audits')).find({ store_id: sid }).toArray();
+  const [openOccurrences, priceIssues, expiryAlerts, audits] = await Promise.all([
+    (await col('occurrences')).find({ store_id: sid, status: { $ne: 'Resolvida' } }).toArray(),
+    (await col('price_checks')).countDocuments({ store_id: sid, $or: [{ has_price_tag: 0 }, { price_divergent: 1 }] }),
+    (await col('expiry_checks')).countDocuments({
+      store_id: sid,
+      condition: { $in: ['Próximo Vencimento', 'Vencido', 'Avaria', 'Embalagem Danificada'] },
+    }),
+    (await col('planogram_audits')).find({ store_id: sid }).toArray(),
+  ]);
+
   const avgShare = audits.length
     ? audits.reduce((acc, a) => acc + Number(a.share_of_shelf || 0), 0) / audits.length
     : 0;
@@ -113,7 +309,8 @@ async function generateStoreSummary(storeId) {
     price_issues_count: priceIssues,
     expiry_alerts_count: expiryAlerts,
     avg_share_of_shelf: Number(avgShare.toFixed(1)),
-    summary: `Resumo Inteligente — ${store.name}: ${openOccurrences.length} ocorrência(s) em aberto, ` +
+    summary:
+      `Resumo Inteligente — ${store.name}: ${openOccurrences.length} ocorrência(s) em aberto, ` +
       `${priceIssues} divergência(s)/falta de preço, ${expiryAlerts} alerta(s) de validade/qualidade e ` +
       `Share of Shelf médio de ${avgShare.toFixed(1)}%.`,
     top_problems: openOccurrences.slice(0, 5),
@@ -123,4 +320,7 @@ async function generateStoreSummary(storeId) {
 module.exports = {
   analyzeShelfImage,
   generateStoreSummary,
+  buildHeuristicFallback,
+  normalizeVisionPayload,
+  extractJsonObject,
 };

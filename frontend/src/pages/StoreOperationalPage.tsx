@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import {
@@ -66,6 +67,7 @@ function stageIndex(stage?: string): number {
 
 export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ storeId, onBack }) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [tab, setTab] = useState<'operacao' | 'historico'>('operacao');
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
@@ -179,7 +181,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
   const notify = (type: 'ok' | 'err', msg: string) => {
     setFeedback({ type, msg });
-    setTimeout(() => setFeedback(null), 5000);
+    toast(type, msg);
   };
 
   const loadOperational = useCallback(async () => {
@@ -246,10 +248,14 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
           );
         });
       }
-      const res = await apiFetch('/visits/start-for-store', {
+      const res = await apiFetch<any>('/visits/start-for-store', {
         method: 'POST',
         body: JSON.stringify({ store_id: storeId, ...coords }),
       });
+      if (res?.offlineQueued || !res?.visit?.id) {
+        notify('ok', 'Check-in salvo na fila offline. Reconecte-se para sincronizar e carregar o fluxo da visita.');
+        return;
+      }
       await refreshWorkflow(res.visit.id);
       notify('ok', 'Check-in registrado! Agora capture a Fotografia Inicial obrigatória.');
     } catch (err: any) {
@@ -267,11 +273,15 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
       fd.append('stage', stage);
       fd.append('area', area);
       fd.append('caption', stage === 'SELFIE_ENTRADA' ? 'Selfie em frente ao estabelecimento' : `Evidência ${stage} - ${area}`);
-      await apiFetch(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/evidences`, { method: 'POST', body: fd });
       if (stage === 'SELFIE_ENTRADA') setSelfieFile(null);
       if (stage === 'INICIAL') setInitialFile(null);
       if (stage === 'COMPLEMENTAR') setCompFile(null);
       if (stage === 'FINAL') setFinalFile(null);
+      if (res?.offlineQueued) {
+        notify('ok', 'Foto salva na fila offline (IndexedDB) e será enviada automaticamente ao reconectar.');
+        return;
+      }
       await refreshWorkflow(workflow.visit.id);
       notify('ok', stage === 'SELFIE_ENTRADA' ? 'Selfie na entrada do estabelecimento registrada!' : `Fotografia ${stage.toLowerCase()} registrada com data/hora e vinculada à loja!`);
     } catch (err: any) {
@@ -295,7 +305,11 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   const handleConfirmInitialPhoto = async () => {
     if (!workflow?.visit) return;
     try {
-      await apiFetch(`/visits/${workflow.visit.id}/confirm-initial-photo`, { method: 'POST' });
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/confirm-initial-photo`, { method: 'POST' });
+      if (res?.offlineQueued) {
+        notify('ok', 'Confirmação enfileirada offline.');
+        return;
+      }
       await refreshWorkflow(workflow.visit.id);
       setViewStage('DIAGNOSTICO');
       notify('ok', 'Fotografia inicial confirmada! Diagnóstico liberado.');
@@ -309,13 +323,17 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     e.preventDefault();
     if (!workflow?.visit) return;
     try {
-      const res = await apiFetch(`/visits/${workflow.visit.id}/diagnostic`, {
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/diagnostic`, {
         method: 'POST',
         body: JSON.stringify({ answers: diag, complementary_items: complementaryItems }),
       });
+      if (res?.offlineQueued) {
+        notify('ok', 'Diagnóstico salvo na fila offline e será sincronizado ao reconectar.');
+        return;
+      }
       await refreshWorkflow(workflow.visit.id);
       setViewStage('EXECUCAO');
-      notify('ok', `Diagnóstico salvo! ${res.generated_occurrences} pendência(s) gerada(s). Execução liberada.`);
+      notify('ok', `Diagnóstico salvo! ${res.generated_occurrences ?? 0} pendência(s) gerada(s). Execução liberada.`);
     } catch (err: any) {
       notify('err', err.message);
     }
@@ -342,22 +360,34 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
 
   const handleToggleChecklist = async (item: any) => {
     if (!workflow?.visit) return;
-    await apiFetch(`/visits/${workflow.visit.id}/checklist/${item.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ completed: !item.completed }),
-    });
-    await refreshWorkflow(workflow.visit.id);
+    try {
+      const res = await apiFetch<any>(`/visits/${workflow.visit.id}/checklist/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ completed: !item.completed }),
+      });
+      if (res?.offlineQueued) {
+        notify('ok', 'Checklist salvo na fila offline.');
+        return;
+      }
+      await refreshWorkflow(workflow.visit.id);
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao atualizar checklist.');
+    }
   };
 
   const handleAddChecklist = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!workflow?.visit || !newCheckItem.trim()) return;
-    await apiFetch(`/visits/${workflow.visit.id}/checklist`, {
-      method: 'POST',
-      body: JSON.stringify({ label: newCheckItem }),
-    });
-    setNewCheckItem('');
-    await refreshWorkflow(workflow.visit.id);
+    try {
+      await apiFetch(`/visits/${workflow.visit.id}/checklist`, {
+        method: 'POST',
+        body: JSON.stringify({ label: newCheckItem }),
+      });
+      setNewCheckItem('');
+      await refreshWorkflow(workflow.visit.id);
+    } catch (err: any) {
+      notify('err', err.message || 'Erro ao adicionar item no checklist.');
+    }
   };
 
   const handleSaveReplenishment = async (e: React.FormEvent) => {

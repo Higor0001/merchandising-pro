@@ -1,9 +1,9 @@
 const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
-const { authenticate, logAudit } = require('../middleware/auth');
+const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
-const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
 const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
 
@@ -23,7 +23,7 @@ router.get('/prices', async (req, res, next) => {
       (await col('stores')).find({}).toArray(),
       (await col('products')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -107,7 +107,11 @@ router.post('/prices', upload.single('photo'), enforceVisitExecutionIntegrity, a
 
     await logAudit(req.user, 'CREATE', 'price_checks', id, `Preço conferido produto #${product_id}`);
     res.status(201).json({ id, price_divergent: divergent, photo_url: photoUrl });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
+  }
 });
 
 // --- EXPIRY & QUALITY ---
@@ -117,7 +121,7 @@ router.get('/expiries', async (_req, res, next) => {
       (await col('expiry_checks')).find({}, { projection: { _id: 0 } }).sort({ expiry_date: 1 }).limit(120).toArray(),
       (await col('stores')).find({}).toArray(),
       (await col('products')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -171,7 +175,7 @@ router.get('/inventory', async (_req, res, next) => {
       (await col('stores')).find({}).toArray(),
       (await col('products')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -266,7 +270,7 @@ router.get('/campaigns', async (_req, res, next) => {
       (await col('campaigns')).find({}, { projection: { _id: 0 } }).sort({ start_date: -1 }).toArray(),
       (await col('campaign_executions')).find({}, { projection: { _id: 0 } }).sort({ id: -1 }).toArray(),
       (await col('stores')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
@@ -282,7 +286,7 @@ router.get('/campaigns', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/campaigns', async (req, res, next) => {
+router.post('/campaigns', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { title, description, start_date, end_date, product_ids, store_ids, materials_needed, checklist } = req.body || {};
     if (!title || !start_date || !end_date) return res.status(400).json({ error: 'Título e período são obrigatórios.' });
@@ -341,7 +345,11 @@ router.post('/campaigns/:id/execute', upload.single('photo'), enforceVisitExecut
 
     await logAudit(req.user, 'EXECUTE', 'campaign_executions', id, `Campanha #${cid} executada na loja #${store_id}`);
     res.status(201).json({ id, photo_url: photoUrl });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
+  }
 });
 
 // --- OCCURRENCES ---
@@ -357,7 +365,7 @@ router.get('/occurrences', async (req, res, next) => {
       (await col('occurrences')).find(filter, { projection: { _id: 0 } }).sort({ id: -1 }).toArray(),
       (await col('stores')).find({}).toArray(),
       (await col('products')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p.name]));
@@ -412,7 +420,11 @@ router.post('/occurrences', upload.single('photo'), enforceVisitExecutionIntegri
 
     await logAudit(req.user, 'CREATE', 'occurrences', id, `Ocorrência ${type} (${priority || 'Média'})`);
     res.status(201).json({ id, photo_url: photoUrl });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
+  }
 });
 
 router.patch('/occurrences/:id', async (req, res, next) => {
@@ -440,7 +452,7 @@ router.get('/ai/analyses', async (_req, res, next) => {
     const [rows, stores, users] = await Promise.all([
       (await col('ai_analyses')).find({}, { projection: { _id: 0 } }).sort({ id: -1 }).limit(50).toArray(),
       (await col('stores')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
@@ -470,6 +482,8 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       extra_point_opportunities_json: JSON.stringify(result.extra_point_opportunities),
       auto_report: result.auto_report,
       confidence: result.confidence,
+      analysis_mode: result.analysis_mode || 'heuristic_fallback',
+      model_used: result.model_used || '',
       human_validation: 'Pendente',
       human_notes: '',
       created_at: nowStr(),
@@ -480,16 +494,20 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       const store = store_id ? await (await col('stores')).findOne({ id: Number(store_id) }) : null;
       await sendPhotoToTelegram({
         filePath: imagePath,
-        reason: `Análise de Gôndola com IA (Score: ${result.planogram_score}% | Confiança: ${result.confidence}%)`,
+        reason: `Análise de Gôndola com IA (${doc.analysis_mode} | Score: ${result.planogram_score}%)`,
         storeName: store?.name,
         promoterName: req.user?.name,
         details: `${result.auto_report}${notes ? ` | Contexto: ${notes}` : ''}`,
       });
     }
 
-    await logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', id, `Análise IA de gôndola (confiança ${result.confidence}%)`);
+    await logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', id, `Análise IA (${doc.analysis_mode}) confiança ${result.confidence}%`);
     res.status(201).json(doc);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
+  }
 });
 
 router.patch('/ai/analyses/:id/validate', async (req, res, next) => {
@@ -529,7 +547,7 @@ router.get('/dashboard', async (_req, res, next) => {
         (await col('campaign_executions')).find({}, { projection: { _id: 0 } }).toArray(),
         (await col('planogram_audits')).find({}, { projection: { _id: 0 } }).toArray(),
         (await col('stores')).find({}).toArray(),
-        (await col('users')).find({}).toArray(),
+        (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
       ]);
 
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
@@ -595,12 +613,22 @@ router.get('/dashboard', async (_req, res, next) => {
 });
 
 // --- REPORTS DATA ---
-router.get('/reports/:type', async (req, res, next) => {
+router.get('/reports/:type', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { type } = req.params;
+    const { start_date, end_date } = req.query;
+    const inPeriod = (dateStr) => {
+      if (!start_date && !end_date) return true;
+      const day = String(dateStr || '').slice(0, 10);
+      if (!day) return false;
+      if (start_date && day < String(start_date)) return false;
+      if (end_date && day > String(end_date)) return false;
+      return true;
+    };
+
     const [stores, users, products, brands] = await Promise.all([
       (await col('stores')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
       (await col('products')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
     ]);
@@ -613,41 +641,64 @@ router.get('/reports/:type', async (req, res, next) => {
       case 'lojas':
         return res.json(stores.map((s) => ({ Loja: s.name, Tipo: s.type, Bandeira: s.banner, Rede: s.network, Região: s.region, Frequência: s.visit_frequency, Contato: s.contact_name })));
       case 'visitas': {
-        const rows = await (await col('visits')).find({}).toArray();
+        const rows = (await (await col('visits')).find({}).toArray()).filter((v) => inPeriod(v.scheduled_date || v.created_at));
         return res.json(rows.map((v) => ({ Data: v.scheduled_date, Loja: storeMap[v.store_id], Promotor: userMap[v.promoter_id], Status: v.status, CheckIn: v.checkin_at, CheckOut: v.checkout_at, Minutos: v.duration_minutes })));
       }
       case 'rupturas': {
-        const rows = await (await col('occurrences')).find({}).toArray();
-        return res.json(rows.map((o) => ({ Data: o.created_at, Loja: storeMap[o.store_id], Tipo: o.type, Prioridade: o.priority, Status: o.status, Descrição: o.description })));
+        const rows = (await (await col('occurrences')).find({}).toArray()).filter((o) => inPeriod(o.created_at));
+        return res.json(rows.map((o) => ({ Data: o.created_at, Loja: storeMap[o.store_id], Produto: prodMap[o.product_id] || '-', Tipo: o.type, Prioridade: o.priority, Status: o.status, Descrição: o.description })));
       }
       case 'abastecimento': {
-        const rows = await (await col('replenishments')).find({}).toArray();
+        const rows = (await (await col('replenishments')).find({}).toArray()).filter((r) => inPeriod(r.created_at));
         return res.json(rows.map((r) => ({ Data: r.created_at, Loja: storeMap[r.store_id], Produto: prodMap[r.product_id], Abastecido: r.quantity_replenished, Gôndola: r.gondola_stock, Retaguarda: r.backroom_stock, Status: r.status })));
       }
       case 'validade': {
-        const rows = await (await col('expiry_checks')).find({}).toArray();
+        const rows = (await (await col('expiry_checks')).find({}).toArray()).filter((e) => inPeriod(e.created_at || e.expiry_date));
         return res.json(rows.map((e) => ({ Validade: e.expiry_date, Loja: storeMap[e.store_id], Produto: prodMap[e.product_id], Lote: e.batch_code, Qtd: e.quantity, Condição: e.condition, Perda_Estimada: e.estimated_loss })));
       }
       case 'precificacao':
       case 'concorrencia': {
-        const rows = await (await col('price_checks')).find({}).toArray();
+        const rows = (await (await col('price_checks')).find({}).toArray()).filter((p) => inPeriod(p.created_at));
         return res.json(rows.map((p) => ({ Data: p.created_at, Loja: storeMap[p.store_id], Produto: prodMap[p.product_id], Preço_Gôndola: p.gondola_price, Preço_Sistema: p.system_price, Promocional: p.promo_price, Concorrente: p.competitor_name, Preço_Concorrente: p.competitor_price })));
       }
       case 'planograma': {
-        const rows = await (await col('planogram_audits')).find({}).toArray();
+        const rows = (await (await col('planogram_audits')).find({}).toArray()).filter((pa) => inPeriod(pa.created_at));
         return res.json(rows.map((pa) => ({ Data: pa.created_at, Loja: storeMap[pa.store_id], Categoria: pa.category, Marca: brandMap[pa.brand_id], Ideal: pa.ideal_facings, Real: pa.actual_facings, Share_Pct: pa.share_of_shelf, Espaços_Perdidos: pa.lost_spaces })));
       }
       case 'campanhas': {
         const [execs, camps] = await Promise.all([(await col('campaign_executions')).find({}).toArray(), (await col('campaigns')).find({}).toArray()]);
         const campMap = Object.fromEntries(camps.map((c) => [c.id, c.title]));
-        return res.json(execs.map((ce) => ({ Campanha: campMap[ce.campaign_id], Loja: storeMap[ce.store_id], Cumprida: ce.compliant, Executada_Em: ce.executed_at, Observações: ce.notes })));
+        return res.json(execs.filter((ce) => inPeriod(ce.executed_at)).map((ce) => ({ Campanha: campMap[ce.campaign_id], Loja: storeMap[ce.store_id], Cumprida: ce.compliant, Executada_Em: ce.executed_at, Observações: ce.notes })));
       }
       case 'fotografico': {
-        const rows = await (await col('displays_exposures')).find({}).toArray();
-        return res.json(rows.map((d) => ({ Data: d.created_at, Loja: storeMap[d.store_id], Tipo: d.exposure_type, Categoria: d.category, Foto_Antes: d.photo_before, Foto_Depois: d.photo_after, Observações: d.notes })));
+        const [evidences, displays] = await Promise.all([
+          (await col('visit_evidences')).find({ is_active: { $ne: 0 } }).sort({ id: -1 }).toArray(),
+          (await col('displays_exposures')).find({}).sort({ id: -1 }).toArray(),
+        ]);
+        const evRows = evidences
+          .filter((e) => inPeriod(e.captured_at))
+          .map((e) => ({
+            Data: e.captured_at,
+            Loja: storeMap[e.store_id],
+            Origem: `Visita #${e.visit_id} (${e.stage})`,
+            Área_Categoria: e.area || '-',
+            Foto: e.photo_url,
+            Observações: e.caption || '',
+          }));
+        const dispRows = displays
+          .filter((d) => inPeriod(d.created_at))
+          .map((d) => ({
+            Data: d.created_at,
+            Loja: storeMap[d.store_id],
+            Origem: `Exposição (${d.exposure_type})`,
+            Área_Categoria: d.category || '-',
+            Foto: [d.photo_before, d.photo_after].filter(Boolean).join(' | '),
+            Observações: d.notes || '',
+          }));
+        return res.json([...evRows, ...dispRows]);
       }
       case 'produtividade': {
-        const visits = await (await col('visits')).find({}).toArray();
+        const visits = (await (await col('visits')).find({}).toArray()).filter((v) => inPeriod(v.scheduled_date || v.created_at));
         const promoters = users.filter((u) => u.role === 'promotor');
         return res.json(promoters.map((u) => {
           const pv = visits.filter((v) => v.promoter_id === u.id);
@@ -658,7 +709,7 @@ router.get('/reports/:type', async (req, res, next) => {
         }));
       }
       default: {
-        const rows = await (await col('visits')).find({}).toArray();
+        const rows = (await (await col('visits')).find({}).toArray()).filter((v) => inPeriod(v.scheduled_date || v.created_at));
         return res.json(rows.map((v) => ({ Data: v.scheduled_date, Loja: storeMap[v.store_id], Visita_Status: v.status, Duração_Min: v.duration_minutes, Notas: v.notes })));
       }
     }

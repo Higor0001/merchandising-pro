@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Tag, TrendingUp } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'concorrencia' }> = ({ mode }) => {
+  const { toast } = useToast();
   const [rows, setRows] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
   const [products, setProducts] = useState<CachedProduct[]>([]);
@@ -34,13 +36,18 @@ export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'conco
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fd = new FormData();
-    Object.entries(form).forEach(([k, v]) => fd.append(k, String(v)));
-    if (photo) fd.append('photo', photo);
-    await apiFetch('/prices', { method: 'POST', body: fd });
-    setPhoto(null);
-    setForm((f) => ({ ...f, notes: '' }));
-    load();
+    try {
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => fd.append(k, String(v)));
+      if (photo) fd.append('photo', photo);
+      const res = await apiFetch<any>('/prices', { method: 'POST', body: fd });
+      setPhoto(null);
+      setForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Pesquisa de preço salva na fila offline!' : 'Pesquisa de preço registrada!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar pesquisa de preço.');
+    }
   };
 
   return (
@@ -79,7 +86,7 @@ export const PricingAndCompetitorsPage: React.FC<{ mode: 'precificacao' | 'conco
           <input type="number" step="0.01" placeholder="Preço Concorrente (R$)" value={form.competitor_price} onChange={(e) => setForm({ ...form, competitor_price: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-          <PhotoInput label="Foto da Etiqueta / Gôndola" onFileSelect={setPhoto} />
+          <PhotoInput label="Foto da Etiqueta / Gôndola" file={photo} onFileSelect={setPhoto} />
           <div className="flex gap-2">
             <input placeholder="Observações..." value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="flex-1 px-3 py-2 border rounded-xl text-sm" />
             <button type="submit" className="px-5 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl">Registrar</button>

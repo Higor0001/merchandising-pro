@@ -4,6 +4,7 @@ import { apiFetch } from '../services/api';
 import { exportToExcel, exportToPDF } from '../services/exportUtils';
 import { clearAllSearchAndCatalogCache, pullPepsicoFromOpenFoodFacts, syncFullCatalogFromSi5 } from '../services/productCatalogCache';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 const REPORT_TYPES = [
   { id: 'lojas', title: 'Relatório Individual por Loja' },
@@ -22,15 +23,18 @@ const REPORT_TYPES = [
 
 export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configuracoes' }> = ({ mode }) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [users, setUsers] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [previewRows, setPreviewRows] = useState<any[] | null>(null);
   const [previewTitle, setPreviewTitle] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const [newBrand, setNewBrand] = useState({ name: '', is_own: true });
-  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '1', category: 'Salgadinhos', system_price: '' });
+  const [newProd, setNewProd] = useState({ sku: '', ean: '', name: '', brand_id: '', category: 'Salgadinhos', system_price: '' });
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
 
   // SI5 Global API state
@@ -41,38 +45,82 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
   const [targetProductId, setTargetProductId] = useState('');
 
   const loadConfig = async () => {
-    const [b, p] = await Promise.all([apiFetch('/brands'), apiFetch('/products')]);
-    setBrands(b);
-    setProducts(p);
-    if (user?.role === 'admin' || user?.role === 'supervisor') {
-      const [u, l] = await Promise.all([apiFetch('/auth/users'), apiFetch('/auth/audit-logs')]);
-      setUsers(u);
-      setLogs(l);
+    try {
+      const [b, p] = await Promise.all([apiFetch('/brands'), apiFetch('/products')]);
+      setBrands(b);
+      setProducts(p);
+      if (Array.isArray(b) && b.length > 0) {
+        setNewProd((prev) => ({ ...prev, brand_id: prev.brand_id || String(b[0].id) }));
+      }
+      if (user?.role === 'admin' || user?.role === 'supervisor') {
+        const [u, l] = await Promise.all([apiFetch('/auth/users'), apiFetch('/auth/audit-logs')]);
+        setUsers(u);
+        setLogs(l);
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar configurações.');
     }
   };
 
   useEffect(() => {
-    if (mode === 'configuracoes') loadConfig();
+    if (mode === 'configuracoes') void loadConfig();
   }, [mode]);
 
+  const buildReportUrl = (repId: string) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    const qs = params.toString();
+    return qs ? `/reports/${repId}?${qs}` : `/reports/${repId}`;
+  };
+
   const handleExport = async (repId: string, repTitle: string, format: 'pdf' | 'excel') => {
-    const rows = await apiFetch<any[]>(`/reports/${repId}`);
-    if (format === 'pdf') exportToPDF(rows, repTitle, `merchandising_${repId}`);
-    else exportToExcel(rows, `merchandising_${repId}`, repId);
+    try {
+      const rows = await apiFetch<any[]>(buildReportUrl(repId));
+      const ok =
+        format === 'pdf'
+          ? exportToPDF(rows, repTitle, `merchandising_${repId}`)
+          : exportToExcel(rows, `merchandising_${repId}`, repId);
+      if (!ok) toast('info', 'Nenhum dado disponível para exportar neste período.');
+      else toast('ok', `Relatório ${format.toUpperCase()} gerado com sucesso.`);
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao exportar relatório.');
+    }
   };
 
   const handlePreview = async (repId: string, repTitle: string) => {
-    const rows = await apiFetch<any[]>(`/reports/${repId}`);
-    setPreviewTitle(repTitle);
-    setPreviewRows(rows);
+    try {
+      const rows = await apiFetch<any[]>(buildReportUrl(repId));
+      setPreviewTitle(repTitle);
+      setPreviewRows(rows);
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar prévia do relatório.');
+    }
   };
 
   if (mode === 'relatorios') {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-xl font-extrabold text-slate-900">Relatórios Gerenciais (PDF & Excel)</h1>
-          <p className="text-sm text-slate-500">Exporte todos os indicadores operacionais e estratégicos com dados reais do PDV</p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-extrabold text-slate-900">Relatórios Gerenciais (PDF & Excel)</h1>
+            <p className="text-sm text-slate-500">Exporte todos os indicadores operacionais e estratégicos com dados reais do PDV</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 bg-white p-2.5 rounded-xl border border-slate-200 text-xs">
+            <label className="flex items-center gap-1.5 text-slate-600 font-semibold">
+              De:
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-2 py-1 border rounded-lg" />
+            </label>
+            <label className="flex items-center gap-1.5 text-slate-600 font-semibold">
+              Até:
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-2 py-1 border rounded-lg" />
+            </label>
+            {(startDate || endDate) && (
+              <button type="button" onClick={() => { setStartDate(''); setEndDate(''); }} className="px-2 py-1 bg-slate-100 rounded-lg font-bold text-slate-600">
+                Limpar
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -155,8 +203,8 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
                 setSi5Query('');
                 setSi5Results([]);
                 setSi5Error('');
-                alert('Todas as pesquisas realizadas e o cache local foram limpos!');
-                loadConfig();
+                toast('ok', 'Todas as pesquisas realizadas e o cache local foram limpos!');
+                void loadConfig();
               }}
               className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
             >
@@ -170,8 +218,8 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
                 setSi5Error('');
                 try {
                   const res = await pullPepsicoFromOpenFoodFacts();
-                  alert(`Catálogo PepsiCo importado gratuitamente via Open Food Facts! ${res.products.length} produtos no catálogo (${res.inserted} novos, ${res.updated} atualizados).`);
-                  loadConfig();
+                  toast('ok', `Catálogo PepsiCo importado via Open Food Facts! ${res.products.length} produtos (${res.inserted} novos, ${res.updated} atualizados).`);
+                  void loadConfig();
                 } catch (err: any) {
                   setSi5Error(err.message || 'Erro ao importar catálogo PepsiCo.');
                 } finally {
@@ -190,8 +238,8 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
                 setSi5Error('');
                 try {
                   const res = await syncFullCatalogFromSi5(si5Query.trim());
-                  alert(`Puxada completa da SI5 concluída (${res.pages_fetched} página(s))! ${res.products.length} produtos salvos no banco e no dispositivo (${res.inserted} novos, ${res.updated} atualizados).`);
-                  loadConfig();
+                  toast('ok', `Puxada SI5 concluída (${res.pages_fetched} pág)! ${res.products.length} produtos (${res.inserted} novos, ${res.updated} atualizados).`);
+                  void loadConfig();
                 } catch (err: any) {
                   setSi5Error(err.message || 'Erro ao sincronizar catálogo SI5.');
                 } finally {
@@ -283,10 +331,10 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
                           target_product_id: targetProductId ? Number(targetProductId) : null,
                         }),
                       });
-                      alert(targetProductId ? 'EAN vinculado com sucesso!' : 'Produto importado para o catálogo!');
-                      loadConfig();
+                      toast('ok', targetProductId ? 'EAN vinculado com sucesso!' : 'Produto importado para o catálogo!');
+                      void loadConfig();
                     } catch (err: any) {
-                      alert(err.message);
+                      toast('err', err.message || 'Erro ao importar produto.');
                     }
                   }}
                   className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold flex items-center gap-1 shrink-0"
@@ -306,9 +354,14 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              await apiFetch('/brands', { method: 'POST', body: JSON.stringify(newBrand) });
-              setNewBrand({ name: '', is_own: true });
-              loadConfig();
+              try {
+                await apiFetch('/brands', { method: 'POST', body: JSON.stringify(newBrand) });
+                setNewBrand({ name: '', is_own: true });
+                toast('ok', 'Marca cadastrada com sucesso!');
+                void loadConfig();
+              } catch (err: any) {
+                toast('err', err.message || 'Erro ao cadastrar marca.');
+              }
             }}
             className="flex gap-2"
           >
@@ -333,17 +386,33 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              await apiFetch('/products', { method: 'POST', body: JSON.stringify({ ...newProd, brand_id: Number(newProd.brand_id), system_price: Number(newProd.system_price) }) });
-              setNewProd({ sku: '', ean: '', name: '', brand_id: '1', category: 'Salgadinhos', system_price: '' });
-              loadConfig();
+              try {
+                await apiFetch('/products', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    ...newProd,
+                    brand_id: newProd.brand_id ? Number(newProd.brand_id) : null,
+                    system_price: Number(newProd.system_price || 0),
+                  }),
+                });
+                setNewProd((prev) => ({ sku: '', ean: '', name: '', brand_id: prev.brand_id, category: 'Salgadinhos', system_price: '' }));
+                toast('ok', 'Produto cadastrado no catálogo!');
+                void loadConfig();
+              } catch (err: any) {
+                toast('err', err.message || 'Erro ao cadastrar produto.');
+              }
             }}
             className="grid grid-cols-2 gap-2"
           >
             <input required placeholder="SKU" value={newProd.sku} onChange={(e) => setNewProd({ ...newProd, sku: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <input required placeholder="EAN / Cód. Barras" value={newProd.ean} onChange={(e) => setNewProd({ ...newProd, ean: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
             <input required placeholder="Nome do Produto" value={newProd.name} onChange={(e) => setNewProd({ ...newProd, name: e.target.value })} className="col-span-2 px-3 py-2 border rounded-xl text-xs" />
+            <select value={newProd.brand_id} onChange={(e) => setNewProd({ ...newProd, brand_id: e.target.value })} className="px-3 py-2 border rounded-xl text-xs bg-white">
+              <option value="">Sem marca</option>
+              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
             <input required placeholder="Categoria" value={newProd.category} onChange={(e) => setNewProd({ ...newProd, category: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
-            <input type="number" step="0.01" placeholder="Preço Sistema" value={newProd.system_price} onChange={(e) => setNewProd({ ...newProd, system_price: e.target.value })} className="px-3 py-2 border rounded-xl text-xs" />
+            <input type="number" step="0.01" placeholder="Preço Sistema" value={newProd.system_price} onChange={(e) => setNewProd({ ...newProd, system_price: e.target.value })} className="col-span-2 px-3 py-2 border rounded-xl text-xs" />
             <button type="submit" className="col-span-2 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold">Cadastrar Produto ({products.length} ativos)</button>
           </form>
         </div>
@@ -356,9 +425,14 @@ export const ReportsAndSettingsPage: React.FC<{ mode: 'relatorios' | 'configurac
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              await apiFetch('/auth/users', { method: 'POST', body: JSON.stringify(newUser) });
-              setNewUser({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
-              loadConfig();
+              try {
+                await apiFetch('/auth/users', { method: 'POST', body: JSON.stringify(newUser) });
+                setNewUser({ name: '', email: '', password: '', role: 'promotor', region: 'Centro' });
+                toast('ok', 'Usuário criado com sucesso!');
+                void loadConfig();
+              } catch (err: any) {
+                toast('err', err.message || 'Erro ao criar usuário.');
+              }
             }}
             className="grid grid-cols-1 sm:grid-cols-5 gap-2"
           >

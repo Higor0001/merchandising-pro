@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { Barcode, Camera, X } from 'lucide-react';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 interface BarcodeScannerModalProps {
   open: boolean;
@@ -9,51 +10,121 @@ interface BarcodeScannerModalProps {
 
 export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ open, onClose, onDetected }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const onCloseRef = useRef(onClose);
+  const onDetectedRef = useRef(onDetected);
   const [manualEan, setManualEan] = useState('');
   const [cameraError, setCameraError] = useState('');
+  const [useFallbackLib, setUseFallbackLib] = useState(false);
+  const readerDomId = useId().replace(/:/g, '_');
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onDetectedRef.current = onDetected;
+  }, [onClose, onDetected]);
 
   useEffect(() => {
     if (!open) return;
-    let stream: MediaStream | null = null;
-    let active = true;
 
-    async function startCamera() {
+    setCameraError('');
+    const hasNativeDetector = typeof window !== 'undefined' && 'BarcodeDetector' in window;
+    setUseFallbackLib(!hasNativeDetector);
+
+    let active = true;
+    let stream: MediaStream | null = null;
+    let rafId = 0;
+    let html5Scanner: Html5Qrcode | null = null;
+
+    async function startNative() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        if (videoRef.current && active) {
+        if (!active) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
         }
-        if ('BarcodeDetector' in window) {
-          // @ts-ignore
-          const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128'] });
-          const scanLoop = async () => {
-            if (!active || !videoRef.current) return;
-            try {
-              const codes = await detector.detect(videoRef.current);
-              if (codes.length > 0 && codes[0].rawValue) {
-                onDetected(codes[0].rawValue);
-                onClose();
-                return;
-              }
-            } catch {
-              // ignore frame errors
+        // @ts-ignore - BarcodeDetector API disponível em Chromium
+        const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'upc_e'] });
+        const scanLoop = async () => {
+          if (!active || !videoRef.current) return;
+          try {
+            const codes = await detector.detect(videoRef.current);
+            if (codes.length > 0 && codes[0].rawValue) {
+              active = false;
+              onDetectedRef.current(codes[0].rawValue);
+              onCloseRef.current();
+              return;
             }
-            if (active) requestAnimationFrame(scanLoop);
-          };
-          requestAnimationFrame(scanLoop);
-        }
+          } catch {
+            // ignore frame errors
+          }
+          if (active) rafId = requestAnimationFrame(scanLoop);
+        };
+        rafId = requestAnimationFrame(scanLoop);
       } catch {
-        setCameraError('Câmera indisponível neste dispositivo. Digite o código EAN abaixo.');
+        if (active) setCameraError('Câmera indisponível neste dispositivo. Digite o código EAN abaixo.');
       }
     }
 
-    startCamera();
+    async function startFallback() {
+      // Aguarda o div do leitor montar no DOM
+      await new Promise((r) => setTimeout(r, 80));
+      if (!active) return;
+      const el = document.getElementById(`barcode-reader-${readerDomId}`);
+      if (!el) return;
+
+      try {
+        html5Scanner = new Html5Qrcode(`barcode-reader-${readerDomId}`, {
+          verbose: false,
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+          ],
+        });
+        await html5Scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 110 } },
+          (decodedText) => {
+            if (!active || !decodedText) return;
+            active = false;
+            onDetectedRef.current(decodedText);
+            onCloseRef.current();
+          },
+          () => {
+            // ignore per-frame scan misses
+          }
+        );
+      } catch {
+        if (active) setCameraError('Câmera indisponível neste navegador. Digite o código EAN abaixo.');
+      }
+    }
+
+    if (hasNativeDetector) void startNative();
+    else void startFallback();
+
     return () => {
       active = false;
+      if (rafId) cancelAnimationFrame(rafId);
       if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (html5Scanner) {
+        html5Scanner
+          .stop()
+          .catch(() => {})
+          .finally(() => {
+            try {
+              html5Scanner?.clear();
+            } catch {
+              // ignore
+            }
+          });
+      }
     };
-  }, [open, onClose, onDetected]);
+  }, [open, readerDomId]);
 
   if (!open) return null;
 
@@ -65,7 +136,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ open, 
             <Barcode className="w-5 h-5 text-blue-600" />
             <span>Leitor de Código de Barras (EAN)</span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100">
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -74,6 +145,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({ open, 
           <div className="p-4 bg-amber-50 text-amber-800 rounded-xl text-sm flex items-center gap-2">
             <Camera className="w-4 h-4 shrink-0" />
             <span>{cameraError}</span>
+          </div>
+        ) : useFallbackLib ? (
+          <div className="rounded-xl overflow-hidden bg-black min-h-[200px]">
+            <div id={`barcode-reader-${readerDomId}`} className="w-full" />
           </div>
         ) : (
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video">

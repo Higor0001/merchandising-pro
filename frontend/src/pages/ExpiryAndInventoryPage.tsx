@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarClock, Boxes } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useToast } from '../context/ToastContext';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }> = ({ mode }) => {
+  const { toast } = useToast();
   const [expiries, setExpiries] = useState<any[]>([]);
   const [inventory, setInventory] = useState<{ stock: any[]; movements: any[] }>({ stock: [], movements: [] });
   const [stores, setStores] = useState<any[]>([]);
@@ -56,33 +58,43 @@ export const ExpiryAndInventoryPage: React.FC<{ mode: 'validades' | 'estoque' }>
 
   const submitExpiry = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/expiries', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...expForm,
-        store_id: Number(expForm.store_id),
-        product_id: Number(expForm.product_id),
-        quantity: Number(expForm.quantity),
-        estimated_loss: Number(expForm.estimated_loss),
-      }),
-    });
-    setExpForm((f) => ({ ...f, batch_code: '', notes: '' }));
-    load();
+    try {
+      const res = await apiFetch<any>('/expiries', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...expForm,
+          store_id: Number(expForm.store_id),
+          product_id: Number(expForm.product_id),
+          quantity: Number(expForm.quantity),
+          estimated_loss: Number(expForm.estimated_loss),
+        }),
+      });
+      setExpForm((f) => ({ ...f, batch_code: '', notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Conferência salva na fila offline!' : 'Conferência de validade registrada!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar conferência de validade.');
+    }
   };
 
   const submitMovement = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/inventory/movement', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...movForm,
-        store_id: Number(movForm.store_id),
-        product_id: Number(movForm.product_id),
-        quantity: Number(movForm.quantity),
-      }),
-    });
-    setMovForm((f) => ({ ...f, notes: '' }));
-    load();
+    try {
+      const res = await apiFetch<any>('/inventory/movement', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...movForm,
+          store_id: Number(movForm.store_id),
+          product_id: Number(movForm.product_id),
+          quantity: Number(movForm.quantity),
+        }),
+      });
+      setMovForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Movimentação salva na fila offline!' : 'Movimentação de estoque registrada!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar movimentação.');
+    }
   };
 
   if (mode === 'validades') {

@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Layers, Grid3X3, Sparkles } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-extras' | 'planogramas' }> = ({ mode }) => {
+  const { toast } = useToast();
   const [displays, setDisplays] = useState<any[]>([]);
   const [planograms, setPlanograms] = useState<{ rows: any[]; indicators: any }>({ rows: [], indicators: { byBrand: [], byCategory: [], byStore: [] } });
   const [stores, setStores] = useState<any[]>([]);
@@ -71,33 +73,43 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
 
   const submitDisplay = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fd = new FormData();
-    Object.entries(displayForm).forEach(([k, v]) => fd.append(k, String(v)));
-    if (photoBefore) fd.append('photo_before', photoBefore);
-    if (photoAfter) fd.append('photo_after', photoAfter);
-    await apiFetch('/displays', { method: 'POST', body: fd });
-    setPhotoBefore(null);
-    setPhotoAfter(null);
-    setDisplayForm((f) => ({ ...f, notes: '' }));
-    load();
+    try {
+      const fd = new FormData();
+      Object.entries(displayForm).forEach(([k, v]) => fd.append(k, String(v)));
+      if (photoBefore) fd.append('photo_before', photoBefore);
+      if (photoAfter) fd.append('photo_after', photoAfter);
+      const res = await apiFetch<any>('/displays', { method: 'POST', body: fd });
+      setPhotoBefore(null);
+      setPhotoAfter(null);
+      setDisplayForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Exposição salva na fila offline!' : 'Exposição registrada com sucesso!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar exposição.');
+    }
   };
 
   const submitPlanogram = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/planograms', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...planForm,
-        store_id: Number(planForm.store_id),
-        brand_id: Number(planForm.brand_id),
-        product_id: Number(planForm.product_id),
-        ideal_facings: Number(planForm.ideal_facings),
-        actual_facings: Number(planForm.actual_facings),
-        total_category_facings: Number(planForm.total_category_facings),
-        competitor_facings: Number(planForm.competitor_facings),
-      }),
-    });
-    load();
+    try {
+      const res = await apiFetch<any>('/planograms', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...planForm,
+          store_id: Number(planForm.store_id),
+          brand_id: Number(planForm.brand_id),
+          product_id: Number(planForm.product_id),
+          ideal_facings: Number(planForm.ideal_facings),
+          actual_facings: Number(planForm.actual_facings),
+          total_category_facings: Number(planForm.total_category_facings),
+          competitor_facings: Number(planForm.competitor_facings),
+        }),
+      });
+      toast('ok', res?.offlineQueued ? 'Auditoria salva na fila offline!' : 'Auditoria de planograma registrada!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar planograma.');
+    }
   };
 
   if (mode === 'planogramas') {
@@ -235,8 +247,8 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <PhotoInput label="Foto ANTES da execução" onFileSelect={setPhotoBefore} />
-          <PhotoInput label="Foto DEPOIS da execução" onFileSelect={setPhotoAfter} />
+          <PhotoInput label="Foto ANTES da execução" file={photoBefore} onFileSelect={setPhotoBefore} />
+          <PhotoInput label="Foto DEPOIS da execução" file={photoAfter} onFileSelect={setPhotoAfter} />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">

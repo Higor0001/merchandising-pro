@@ -29,23 +29,23 @@ import { useAuth } from '../context/AuthContext';
 import { useOffline } from '../context/OfflineContext';
 
 export const MENU_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'visitas', label: 'Minhas visitas', icon: ClipboardCheck },
-  { id: 'roteiros', label: 'Roteiros', icon: MapPin },
-  { id: 'lojas', label: 'Lojas', icon: Store },
-  { id: 'abastecimento', label: 'Abastecimento', icon: PackagePlus },
-  { id: 'exposicao', label: 'Exposição e gôndolas', icon: Layers },
-  { id: 'planogramas', label: 'Planogramas', icon: Grid3X3 },
-  { id: 'precificacao', label: 'Precificação', icon: Tag },
-  { id: 'validades', label: 'Validades', icon: CalendarClock },
-  { id: 'rupturas', label: 'Rupturas', icon: AlertTriangle },
-  { id: 'pontos-extras', label: 'Pontos extras', icon: Sparkles },
-  { id: 'campanhas', label: 'Campanhas', icon: Megaphone },
-  { id: 'concorrencia', label: 'Concorrência', icon: TrendingUp },
-  { id: 'estoque', label: 'Estoque', icon: Boxes },
-  { id: 'ocorrencias', label: 'Ocorrências', icon: Bell },
-  { id: 'relatorios', label: 'Relatórios', icon: FileBarChart },
-  { id: 'configuracoes', label: 'Configurações', icon: Settings },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, managerOnly: false },
+  { id: 'visitas', label: 'Minhas visitas', icon: ClipboardCheck, managerOnly: false },
+  { id: 'roteiros', label: 'Roteiros', icon: MapPin, managerOnly: false },
+  { id: 'lojas', label: 'Lojas', icon: Store, managerOnly: false },
+  { id: 'abastecimento', label: 'Abastecimento', icon: PackagePlus, managerOnly: false },
+  { id: 'exposicao', label: 'Exposição e gôndolas', icon: Layers, managerOnly: false },
+  { id: 'planogramas', label: 'Planogramas', icon: Grid3X3, managerOnly: false },
+  { id: 'precificacao', label: 'Precificação', icon: Tag, managerOnly: false },
+  { id: 'validades', label: 'Validades', icon: CalendarClock, managerOnly: false },
+  { id: 'rupturas', label: 'Rupturas', icon: AlertTriangle, managerOnly: false },
+  { id: 'pontos-extras', label: 'Pontos extras', icon: Sparkles, managerOnly: false },
+  { id: 'campanhas', label: 'Campanhas', icon: Megaphone, managerOnly: false },
+  { id: 'concorrencia', label: 'Concorrência', icon: TrendingUp, managerOnly: false },
+  { id: 'estoque', label: 'Estoque', icon: Boxes, managerOnly: false },
+  { id: 'ocorrencias', label: 'Ocorrências', icon: Bell, managerOnly: false },
+  { id: 'relatorios', label: 'Relatórios', icon: FileBarChart, managerOnly: true },
+  { id: 'configuracoes', label: 'Configurações', icon: Settings, managerOnly: true },
 ] as const;
 
 export type MenuId = (typeof MENU_ITEMS)[number]['id'] | 'ia';
@@ -59,7 +59,10 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ activePage, onNavigate, children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout } = useAuth();
-  const { isOnline, pendingCount, syncNow, syncing } = useOffline();
+  const { isOnline, pendingCount, failedCount, syncNow, retryFailed, clearFailed, syncing } = useOffline();
+
+  const isManager = user?.role === 'admin' || user?.role === 'supervisor';
+  const visibleMenuItems = MENU_ITEMS.filter((item) => !item.managerOnly || isManager);
 
   const roleLabels: Record<string, string> = {
     promotor: 'Promotor',
@@ -147,9 +150,9 @@ export const Layout: React.FC<LayoutProps> = ({ activePage, onNavigate, children
           </button>
         </div>
 
-        {/* 17 Menu Items */}
+        {/* Menu Items filtrados por perfil */}
         <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-          {MENU_ITEMS.map((item, idx) => {
+          {visibleMenuItems.map((item, idx) => {
             const Icon = item.icon;
             const active = activePage === item.id;
             return (
@@ -198,7 +201,18 @@ export const Layout: React.FC<LayoutProps> = ({ activePage, onNavigate, children
         {!isOnline && (
           <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-center gap-2">
             <WifiOff className="w-4 h-4" />
-            Modo Offline ativo — Suas ações serão sincronizadas automaticamente ao reconectar.
+            Modo Offline ativo — Suas ações e fotos são salvas no IndexedDB e sincronizadas ao reconectar.
+          </div>
+        )}
+        {failedCount > 0 && (
+          <div className="bg-red-600 text-white px-4 py-2 text-xs font-semibold flex flex-wrap items-center justify-center gap-3">
+            <span>{failedCount} registro(s) offline falharam na sincronização por regra de validação.</span>
+            <button onClick={retryFailed} className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 font-bold">
+              Tentar novamente
+            </button>
+            <button onClick={clearFailed} className="px-2.5 py-1 rounded-lg bg-slate-900/40 hover:bg-slate-900/60 font-bold">
+              Descartar
+            </button>
           </div>
         )}
         <div className="max-w-7xl mx-auto p-4 lg:p-6">{children}</div>

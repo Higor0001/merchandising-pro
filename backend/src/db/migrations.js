@@ -13,10 +13,17 @@ async function runIncrementalMigrations() {
   migrationPromise = (async () => {
     // 1. Índices para integridade referencial lógica e performance store-centric
     await Promise.all([
+      (await col('users')).createIndex({ id: 1 }, { unique: true }),
+      (await col('users')).createIndex({ email: 1 }, { unique: true }),
+      (await col('brands')).createIndex({ id: 1 }, { unique: true }),
+      (await col('products')).createIndex({ id: 1 }, { unique: true }),
+      (await col('products')).createIndex({ ean: 1 }),
+      (await col('products')).createIndex({ active: 1, name: 1 }),
       (await col('stores')).createIndex({ id: 1 }, { unique: true }),
       (await col('visits')).createIndex({ id: 1 }, { unique: true }),
       (await col('visits')).createIndex({ store_id: 1, status: 1 }),
       (await col('visits')).createIndex({ store_id: 1, scheduled_date: -1 }),
+      (await col('visit_checklists')).createIndex({ visit_id: 1 }),
       (await col('visit_evidences')).createIndex({ id: 1 }, { unique: true }),
       (await col('visit_evidences')).createIndex({ visit_id: 1, stage: 1 }),
       (await col('visit_evidences')).createIndex({ store_id: 1, captured_at: -1 }),
@@ -29,6 +36,7 @@ async function runIncrementalMigrations() {
       (await col('price_checks')).createIndex({ store_id: 1, visit_id: 1 }),
       (await col('expiry_checks')).createIndex({ store_id: 1, visit_id: 1 }),
       (await col('displays_exposures')).createIndex({ store_id: 1, visit_id: 1 }),
+      (await col('store_inventory')).createIndex({ store_id: 1, product_id: 1 }),
     ]);
 
     // 2. Backfill incremental em visitas antigas sem workflow_stage
@@ -104,6 +112,7 @@ async function runIncrementalMigrations() {
   })().catch((err) => {
     migrationPromise = null;
     console.error('Erro ao executar migrations incrementais:', err.message);
+    throw err;
   });
 
   return migrationPromise;

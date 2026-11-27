@@ -1,4 +1,5 @@
-const { col, nextId, nowStr, hashPassword } = require('./database');
+const crypto = require('node:crypto');
+const { col, nextId, nowStr, hashPasswordAsync } = require('./database');
 const { isSi5Configured, syncSi5Catalog } = require('../services/si5Service');
 
 const DEFAULT_CHECKLIST_ITEMS = [
@@ -36,6 +37,18 @@ async function createDefaultChecklist(visitId, completedCount = 0) {
   if (docs.length) await checklists.insertMany(docs);
 }
 
+function resolveInitialSeedPassword() {
+  const envPass = (process.env.SEED_DEFAULT_PASSWORD || '').trim();
+  if (envPass) return envPass;
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  if (isProd) {
+    const generated = crypto.randomBytes(12).toString('base64url');
+    console.warn(`[SEED] SEED_DEFAULT_PASSWORD ausente em produção. Senha inicial gerada para contas seed: ${generated}`);
+    return generated;
+  }
+  return '123456';
+}
+
 let seedPromise = null;
 
 async function seedIfEmpty() {
@@ -46,10 +59,17 @@ async function seedIfEmpty() {
     if (count > 0) return;
 
     const createdAt = nowStr();
+    const initialPassword = resolveInitialSeedPassword();
+    const [pHash, sHash, aHash] = await Promise.all([
+      hashPasswordAsync(initialPassword),
+      hashPasswordAsync(initialPassword),
+      hashPasswordAsync(initialPassword),
+    ]);
+
     const users = [
-      { id: await nextId('users'), name: 'Promotor', email: 'promotor@merchandising.com', password_hash: hashPassword('123456'), role: 'promotor', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
-      { id: await nextId('users'), name: 'Supervisor', email: 'supervisor@merchandising.com', password_hash: hashPassword('123456'), role: 'supervisor', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
-      { id: await nextId('users'), name: 'Administrador', email: 'admin@merchandising.com', password_hash: hashPassword('123456'), role: 'admin', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
+      { id: await nextId('users'), name: 'Promotor', email: 'promotor@merchandising.com', password_hash: pHash, role: 'promotor', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
+      { id: await nextId('users'), name: 'Supervisor', email: 'supervisor@merchandising.com', password_hash: sHash, role: 'supervisor', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
+      { id: await nextId('users'), name: 'Administrador', email: 'admin@merchandising.com', password_hash: aHash, role: 'admin', region: 'Cachoeiro de Itapemirim/ES', phone: '', active: 1, created_at: createdAt },
     ];
     await usersCol.insertMany(users);
 
@@ -82,16 +102,13 @@ async function seedIfEmpty() {
       'Stiksy', 'Toddy', 'Toddynho', 'Torcida', 'Tostitos',
     ];
     const brandsCol = await col('brands');
-    const brandIdMap = {};
     const brandDocs = [];
     for (const name of pepsicoBrands) {
       const id = await nextId('brands');
-      brandIdMap[name] = id;
       brandDocs.push({ id, name, is_own: 1, color: '#1d4ed8' });
     }
     await brandsCol.insertMany(brandDocs);
 
-    // Catálogo de produtos alimentado exclusivamente pela API SI5 Global
     if (isSi5Configured()) {
       try {
         await syncSi5Catalog({ q: '', pages: 1, per_page: 50 });

@@ -1,16 +1,44 @@
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { col, nextId, nowStr } = require('../db/database');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'merchandising-pro-secret-key-2026';
+const IS_PROD = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+let ephemeralDevSecret = null;
+
+function getJwtSecret() {
+  const envSecret = (process.env.JWT_SECRET || '').trim();
+  if (envSecret) return envSecret;
+
+  if (IS_PROD) {
+    throw new Error('JWT_SECRET não configurada nas variáveis de ambiente de produção.');
+  }
+
+  if (!ephemeralDevSecret) {
+    ephemeralDevSecret = `dev-${crypto.randomBytes(24).toString('hex')}`;
+    console.warn('[AUTH] AVISO: JWT_SECRET ausente em desenvolvimento; usando segredo temporário em memória.');
+  }
+  return ephemeralDevSecret;
+}
 
 async function authenticate(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Token de autenticação não fornecido.' });
   }
-  const token = header.slice(7);
+  const token = header.slice(7).trim();
+  if (!token) {
+    return res.status(401).json({ error: 'Token de autenticação inválido.' });
+  }
+
+  let secret;
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    secret = getJwtSecret();
+  } catch (err) {
+    return next(err);
+  }
+
+  try {
+    const payload = jwt.verify(token, secret);
     const users = await col('users');
     const user = await users.findOne(
       { id: Number(payload.id) },
@@ -54,7 +82,7 @@ async function logAudit(user, action, entity, entityId = null, details = '') {
 }
 
 module.exports = {
-  JWT_SECRET,
+  getJwtSecret,
   authenticate,
   authorize,
   logAudit,

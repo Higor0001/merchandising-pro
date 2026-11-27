@@ -26,18 +26,37 @@ export const DashboardPage: React.FC<{ onNavigate: (p: MenuId) => void; onOpenSt
   const [storeOverview, setStoreOverview] = useState<any>(null);
   const [storeFilter, setStoreFilter] = useState<'todas' | 'rota' | 'andamento' | 'pendentes' | 'ocorrencias' | 'visitadas'>('todas');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
+    setError('');
     Promise.all([apiFetch('/dashboard'), apiFetch('/stores/overview')])
       .then(([dash, ov]) => {
         setData(dash);
         setStoreOverview(ov);
       })
+      .catch((err: any) => {
+        setError(err.message || 'Erro ao carregar indicadores do painel.');
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
   }, []);
 
   if (loading) return <div className="p-8 text-center text-slate-500">Carregando indicadores de execução...</div>;
-  if (!data) return null;
+  if (error || !data) {
+    return (
+      <div className="p-8 bg-white rounded-2xl border border-red-200 text-center space-y-3">
+        <div className="text-sm font-bold text-red-700">{error || 'Não foi possível carregar o Dashboard.'}</div>
+        <button onClick={load} className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl">
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
 
   const k = data.kpis;
   const cards = [

@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Store, Plus, History, Bot, X, ArrowRight } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> = ({ onOpenStore }) => {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const isManager = user?.role === 'admin' || user?.role === 'supervisor';
   const [stores, setStores] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -21,24 +26,36 @@ export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> =
   const [historyData, setHistoryData] = useState<any>(null);
   const [aiSummary, setAiSummary] = useState<any>(null);
 
-  const load = () => apiFetch('/stores').then(setStores);
-  useEffect(() => { load(); }, []);
+  const load = () =>
+    apiFetch('/stores')
+      .then(setStores)
+      .catch((err: any) => toast('err', err.message || 'Erro ao carregar lojas.'));
+  useEffect(() => { void load(); }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/stores', { method: 'POST', body: JSON.stringify(form) });
-    setShowForm(false);
-    setForm({ name: '', type: 'Supermercado', banner: '', network: '', address: '', city: 'São Paulo', region: 'Zona Sul', route_name: 'Rota Sul 01', visit_frequency: 'Semanal', contact_name: '', contact_phone: '' });
-    load();
+    try {
+      await apiFetch('/stores', { method: 'POST', body: JSON.stringify(form) });
+      setShowForm(false);
+      setForm({ name: '', type: 'Supermercado', banner: '', network: '', address: '', city: 'São Paulo', region: 'Zona Sul', route_name: 'Rota Sul 01', visit_frequency: 'Semanal', contact_name: '', contact_phone: '' });
+      toast('ok', 'Loja cadastrada com sucesso!');
+      void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao cadastrar loja.');
+    }
   };
 
   const openHistory = async (storeId: number) => {
-    const [h, ai] = await Promise.all([
-      apiFetch(`/stores/${storeId}/history`),
-      apiFetch(`/ai/store-summary/${storeId}`),
-    ]);
-    setHistoryData(h);
-    setAiSummary(ai);
+    try {
+      const [h, ai] = await Promise.all([
+        apiFetch(`/stores/${storeId}/history`),
+        apiFetch(`/ai/store-summary/${storeId}`),
+      ]);
+      setHistoryData(h);
+      setAiSummary(ai);
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar histórico da loja.');
+    }
   };
 
   return (
@@ -48,9 +65,11 @@ export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> =
           <h1 className="text-xl font-extrabold text-slate-900">Lojas & Pontos de Venda (PDV)</h1>
           <p className="text-sm text-slate-500">Supermercados, atacarejos, bandeiras, rotas, contatos e histórico individual</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
-          <Plus className="w-4 h-4" /> Cadastrar PDV
-        </button>
+        {isManager && (
+          <button onClick={() => setShowForm(!showForm)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
+            <Plus className="w-4 h-4" /> Cadastrar PDV
+          </button>
+        )}
       </div>
 
       {showForm && (

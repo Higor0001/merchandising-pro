@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Megaphone, AlertTriangle, Plus, CheckCircle2 } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
@@ -18,6 +20,9 @@ const OCCURRENCE_TYPES = [
 ];
 
 export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'rupturas' | 'ocorrencias' }> = ({ mode }) => {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const isManager = user?.role === 'admin' || user?.role === 'supervisor';
   const [campaigns, setCampaigns] = useState<{ campaigns: any[]; executions: any[] }>({ campaigns: [], executions: [] });
   const [occurrences, setOccurrences] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
@@ -70,42 +75,62 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
 
   const createCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/campaigns', { method: 'POST', body: JSON.stringify(campForm) });
-    setShowNewCamp(false);
-    setCampForm({ ...campForm, title: '', description: '' });
-    load();
+    try {
+      await apiFetch('/campaigns', { method: 'POST', body: JSON.stringify(campForm) });
+      setShowNewCamp(false);
+      setCampForm({ ...campForm, title: '', description: '' });
+      toast('ok', 'Campanha criada com sucesso!');
+      void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao criar campanha.');
+    }
   };
 
   const executeCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!execForm.campaign_id) return;
-    const fd = new FormData();
-    fd.append('store_id', execForm.store_id);
-    fd.append('compliant', String(execForm.compliant));
-    fd.append('notes', execForm.notes);
-    if (photo) fd.append('photo', photo);
-    await apiFetch(`/campaigns/${execForm.campaign_id}/execute`, { method: 'POST', body: fd });
-    setPhoto(null);
-    setExecForm((f) => ({ ...f, notes: '' }));
-    load();
+    try {
+      const fd = new FormData();
+      fd.append('store_id', execForm.store_id);
+      fd.append('compliant', String(execForm.compliant));
+      fd.append('notes', execForm.notes);
+      if (photo) fd.append('photo', photo);
+      const res = await apiFetch<any>(`/campaigns/${execForm.campaign_id}/execute`, { method: 'POST', body: fd });
+      setPhoto(null);
+      setExecForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Comprovação salva na fila offline!' : 'Comprovação de campanha registrada!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar comprovação.');
+    }
   };
 
   const createOccurrence = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fd = new FormData();
-    Object.entries(occForm).forEach(([k, v]) => {
-      if (v !== '' && v !== null && v !== undefined) fd.append(k, String(v));
-    });
-    if (photo) fd.append('photo', photo);
-    await apiFetch('/occurrences', { method: 'POST', body: fd });
-    setPhoto(null);
-    setOccForm((f) => ({ ...f, product_id: '', description: '' }));
-    load();
+    try {
+      const fd = new FormData();
+      Object.entries(occForm).forEach(([k, v]) => {
+        if (v !== '' && v !== null && v !== undefined) fd.append(k, String(v));
+      });
+      if (photo) fd.append('photo', photo);
+      const res = await apiFetch<any>('/occurrences', { method: 'POST', body: fd });
+      setPhoto(null);
+      setOccForm((f) => ({ ...f, product_id: '', description: '' }));
+      toast('ok', res?.offlineQueued ? 'Ocorrência salva na fila offline!' : 'Ocorrência registrada com sucesso!');
+      if (!res?.offlineQueued) void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar ocorrência.');
+    }
   };
 
   const updateStatus = async (id: number, status: string) => {
-    await apiFetch(`/occurrences/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
-    load();
+    try {
+      await apiFetch(`/occurrences/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      toast('ok', `Status atualizado para ${status}.`);
+      void load();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao atualizar status.');
+    }
   };
 
   if (mode === 'campanhas') {
@@ -116,9 +141,11 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
             <h1 className="text-xl font-extrabold text-slate-900">Execução de Campanhas e Promoções</h1>
             <p className="text-sm text-slate-500">Campanhas comerciais, materiais, comprovação fotográfica e cumprimento por loja</p>
           </div>
-          <button onClick={() => setShowNewCamp(!showNewCamp)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
-            <Plus className="w-4 h-4" /> Nova Campanha
-          </button>
+          {isManager && (
+            <button onClick={() => setShowNewCamp(!showNewCamp)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
+              <Plus className="w-4 h-4" /> Nova Campanha
+            </button>
+          )}
         </div>
 
         {showNewCamp && (
@@ -157,7 +184,7 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
             </select>
             <input placeholder="Observações de implantação..." value={execForm.notes} onChange={(e) => setExecForm({ ...execForm, notes: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
           </div>
-          <PhotoInput label="Foto de Comprovação da Campanha" onFileSelect={setPhoto} />
+          <PhotoInput label="Foto de Comprovação da Campanha" file={photo} onFileSelect={setPhoto} />
           <button type="submit" className="px-5 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl">Confirmar Implantação</button>
         </form>
 
@@ -208,7 +235,7 @@ export const CampaignsAndOccurrencesPage: React.FC<{ mode: 'campanhas' | 'ruptur
         />
         <textarea required placeholder="Descreva o problema ou oportunidade identificada no PDV..." value={occForm.description} onChange={(e) => setOccForm({ ...occForm, description: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" rows={2} />
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <PhotoInput label="Foto da Ocorrência" onFileSelect={setPhoto} />
+          <PhotoInput label="Foto da Ocorrência" file={photo} onFileSelect={setPhoto} />
           <button type="submit" className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-xl">Registrar Ocorrência</button>
         </div>
       </form>

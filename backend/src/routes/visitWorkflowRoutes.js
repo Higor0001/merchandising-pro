@@ -3,20 +3,19 @@ const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
-const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
+const { canOperateVisit, getBrazilDateStr, getBrazilTimeStr, getBrazilDayName } = require('../utils/security');
 
 const router = express.Router();
 router.use(authenticate);
 
-const DAYS_PT = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
-
 function getTodayDayName() {
-  return DAYS_PT[new Date().getDay()];
+  return getBrazilDayName();
 }
 
 function getTodayDateStr() {
-  return new Date().toISOString().slice(0, 10);
+  return getBrazilDateStr();
 }
 
 /**
@@ -322,7 +321,7 @@ router.post('/visits/start-for-store', async (req, res, next) => {
       promoter_id: req.user.id,
       route_id: null,
       scheduled_date: today,
-      scheduled_time: new Date().toTimeString().slice(0, 5),
+      scheduled_time: getBrazilTimeStr(),
       checkin_at: checkinTime,
       checkout_at: null,
       duration_minutes: 0,
@@ -377,6 +376,9 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
     const vid = Number(req.params.id);
     const visit = await (await col('visits')).findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para registrar evidências nesta visita.' });
+    }
     if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
       return res.status(403).json({ error: 'Não é permitido alterar evidências de uma visita encerrada.' });
     }
@@ -423,6 +425,8 @@ router.post('/visits/:id/evidences', upload.single('photo'), async (req, res, ne
     res.status(201).json(doc);
   } catch (err) {
     next(err);
+  } finally {
+    await cleanupUploadedFile(req.file);
   }
 });
 
@@ -433,6 +437,9 @@ router.delete('/visits/:id/evidences/:evId', async (req, res, next) => {
     const evId = Number(req.params.evId);
     const visit = await (await col('visits')).findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para remover evidências nesta visita.' });
+    }
     if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
       return res.status(403).json({ error: 'Proibido excluir evidências de visita encerrada.' });
     }
@@ -456,6 +463,12 @@ router.post('/visits/:id/confirm-initial-photo', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para operar esta visita.' });
+    }
+    if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
+      return res.status(403).json({ error: 'Visita já encerrada.' });
+    }
 
     const evCol = await col('visit_evidences');
     const [selfieCount, initialCount] = await Promise.all([
@@ -490,6 +503,9 @@ router.post('/visits/:id/diagnostic', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para registrar diagnóstico nesta visita.' });
+    }
     if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
       return res.status(403).json({ error: 'Visita encerrada não pode ter diagnóstico alterado.' });
     }
@@ -540,7 +556,14 @@ router.post('/visits/:id/diagnostic', async (req, res, next) => {
       autoIssues.push({ type: 'Concorrente Espaço Estratégico', priority: 'Média', description: `Concorrência ocupando espaço da marca no PDV. ${a.detalhes_concorrencia || ''}`.trim() });
     }
 
+    // Idempotência: remover ocorrências automáticas abertas geradas em envio anterior do diagnóstico desta visita
     const occCol = await col('occurrences');
+    await occCol.deleteMany({
+      visit_id: vid,
+      source: { $in: ['diagnostico', 'diagnostico_complementar'] },
+      status: 'Aberta',
+    });
+
     for (const issue of autoIssues) {
       await occCol.insertOne({
         id: await nextId('occurrences'),
@@ -619,6 +642,9 @@ router.post('/visits/:id/ready-for-final-photo', async (req, res, next) => {
     const visitsCol = await col('visits');
     const visit = await visitsCol.findOne({ id: vid });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
+    if (!canOperateVisit(req.user, visit)) {
+      return res.status(403).json({ error: 'Você não tem permissão para operar esta visita.' });
+    }
     if (visit.status === 'Concluída' || visit.status === 'Cancelada') {
       return res.status(403).json({ error: 'Visita já encerrada.' });
     }

@@ -1,10 +1,11 @@
 const express = require('express');
 const path = require('node:path');
 const { col, nextId, nowStr } = require('../db/database');
-const { authenticate, logAudit } = require('../middleware/auth');
+const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
-const { upload, uploadDir, saveFileToGridFS } = require('../middleware/upload');
+const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { sendPhotoToTelegram } = require('../services/telegramService');
+const { escapeRegex } = require('../utils/security');
 const {
   isSi5Configured,
   searchSi5Products,
@@ -25,7 +26,7 @@ router.get('/brands', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/brands', async (req, res, next) => {
+router.post('/brands', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { name, is_own, color } = req.body || {};
     if (!name) return res.status(400).json({ error: 'Nome da marca é obrigatório.' });
@@ -50,7 +51,7 @@ router.get('/products', async (req, res, next) => {
     if (category) filter.category = category;
     if (brand_id) filter.brand_id = Number(brand_id);
     if (q && String(q).trim()) {
-      const regex = { $regex: String(q).trim(), $options: 'i' };
+      const regex = { $regex: escapeRegex(String(q).trim()), $options: 'i' };
       filter.$or = [{ name: regex }, { ean: regex }, { sku: regex }, { category: regex }];
     }
 
@@ -70,7 +71,7 @@ router.get('/products', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/products', async (req, res, next) => {
+router.post('/products', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const { sku, ean, name, brand_id, category, unit, system_price, min_stock, ideal_facings } = req.body || {};
     if (!sku || !ean || !name || !category) {
@@ -114,7 +115,7 @@ router.get('/replenishments', async (req, res, next) => {
       (await col('stores')).find({}).toArray(),
       (await col('products')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -212,7 +213,7 @@ router.get('/displays', async (req, res, next) => {
       (await col('displays_exposures')).find(filter, { projection: { _id: 0 } }).sort({ id: -1 }).limit(100).toArray(),
       (await col('stores')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
-      (await col('users')).find({}).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const brandMap = Object.fromEntries(brands.map((b) => [b.id, b.name]));
@@ -287,7 +288,14 @@ router.post(
 
       await logAudit(req.user, 'CREATE', 'displays_exposures', id, `Exposição ${exposure_type} registrada`);
       res.status(201).json({ id, photo_before: photoBefore, photo_after: photoAfter });
-    } catch (err) { next(err); }
+    } catch (err) {
+      next(err);
+    } finally {
+      await Promise.all([
+        cleanupUploadedFile(req.files?.photo_before?.[0]),
+        cleanupUploadedFile(req.files?.photo_after?.[0]),
+      ]);
+    }
   }
 );
 
@@ -414,7 +422,7 @@ router.get('/si5/barcode/:codbar', async (req, res) => {
   }
 });
 
-router.post('/si5/sync', async (req, res) => {
+router.post('/si5/sync', authorize('admin', 'supervisor'), async (req, res) => {
   try {
     const { q = '', pages = 2, per_page = 100, full = false } = req.body || {};
     const result = await syncSi5Catalog({
@@ -430,7 +438,7 @@ router.post('/si5/sync', async (req, res) => {
   }
 });
 
-router.post('/si5/full-pull', async (req, res) => {
+router.post('/si5/full-pull', authorize('admin', 'supervisor'), async (req, res) => {
   try {
     const { q = '' } = req.body || {};
     const result = await syncSi5Catalog({ q: String(q), full: true, per_page: 100 });
@@ -474,7 +482,7 @@ router.post('/si5/search-and-cache', async (req, res) => {
 });
 
 // --- OPEN FOOD FACTS (CARGA GRATUITA CATÁLOGO PEPSICO) ---
-router.post('/openfoodfacts/pull-pepsico', async (req, res, next) => {
+router.post('/openfoodfacts/pull-pepsico', authorize('admin', 'supervisor'), async (req, res, next) => {
   try {
     const result = await pullPepsicoFromOpenFoodFacts();
     await logAudit(req.user, 'OFF_PULL_PEPSICO', 'products', null, `Carga Open Food Facts PepsiCo: ${result.inserted} novos, ${result.updated} atualizados`);
@@ -512,7 +520,7 @@ router.post('/si5/import', async (req, res, next) => {
     const brandsCol = await col('brands');
     let brandId = null;
     if (marca) {
-      const existingBrand = await brandsCol.findOne({ name: { $regex: `^${marca.trim()}$`, $options: 'i' } });
+      const existingBrand = await brandsCol.findOne({ name: { $regex: `^${escapeRegex(marca.trim())}$`, $options: 'i' } });
       if (existingBrand) {
         brandId = existingBrand.id;
       } else {
@@ -528,7 +536,7 @@ router.post('/si5/import', async (req, res, next) => {
     const id = await nextId('products');
     const doc = {
       id,
-      sku: `SI5-${String(codbar).slice(-6)}`,
+      sku: `SI5-${String(codbar)}`,
       ean: String(codbar),
       name: produto,
       brand_id: brandId,

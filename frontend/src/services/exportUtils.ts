@@ -2,21 +2,20 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 
-export function exportToExcel(rows: Record<string, any>[], filename: string, sheetName = 'Relatorio') {
+export function exportToExcel(rows: Record<string, any>[], filename: string, sheetName = 'Relatorio'): boolean {
   if (!rows || rows.length === 0) {
-    alert('Nenhum dado disponível para exportar.');
-    return;
+    return false;
   }
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
   XLSX.writeFile(wb, `${filename}.xlsx`);
+  return true;
 }
 
-export function exportToPDF(rows: Record<string, any>[], title: string, filename: string) {
+export function exportToPDF(rows: Record<string, any>[], title: string, filename: string): boolean {
   if (!rows || rows.length === 0) {
-    alert('Nenhum dado disponível para exportar.');
-    return;
+    return false;
   }
   const doc = new jsPDF({ orientation: 'landscape' });
   doc.setFontSize(15);
@@ -40,4 +39,5 @@ export function exportToPDF(rows: Record<string, any>[], title: string, filename
   });
 
   doc.save(`${filename}.pdf`);
+  return true;
 }

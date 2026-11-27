@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { OfflineProvider } from './context/OfflineContext';
+import { ToastProvider } from './context/ToastContext';
 import { Layout, type MenuId } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -21,6 +22,8 @@ const AppContent: React.FC = () => {
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
 
   if (!user) return <LoginPage />;
+
+  const isManager = user.role === 'admin' || user.role === 'supervisor';
 
   const handleNavigate = (nextPage: MenuId) => {
     setSelectedStoreId(null);
@@ -65,9 +68,17 @@ const AppContent: React.FC = () => {
       case 'ia':
         return <AIPage />;
       case 'relatorios':
-        return <ReportsAndSettingsPage mode="relatorios" />;
+        return isManager ? (
+          <ReportsAndSettingsPage mode="relatorios" />
+        ) : (
+          <DashboardPage onNavigate={handleNavigate} onOpenStore={setSelectedStoreId} />
+        );
       case 'configuracoes':
-        return <ReportsAndSettingsPage mode="configuracoes" />;
+        return isManager ? (
+          <ReportsAndSettingsPage mode="configuracoes" />
+        ) : (
+          <DashboardPage onNavigate={handleNavigate} onOpenStore={setSelectedStoreId} />
+        );
       default:
         return <DashboardPage onNavigate={handleNavigate} onOpenStore={setSelectedStoreId} />;
     }
@@ -82,11 +93,13 @@ const AppContent: React.FC = () => {
 
 export function App() {
   return (
-    <AuthProvider>
-      <OfflineProvider>
-        <AppContent />
-      </OfflineProvider>
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <OfflineProvider>
+          <AppContent />
+        </OfflineProvider>
+      </AuthProvider>
+    </ToastProvider>
   );
 }
 

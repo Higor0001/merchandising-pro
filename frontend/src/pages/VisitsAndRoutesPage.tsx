@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, MapPin, Play, Square, Plus, Camera, ListChecks, XCircle } from 'lucide-react';
 import { apiFetch } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
 export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpenStore?: (storeId: number) => void }> = ({ mode, onOpenStore }) => {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const isManager = user?.role === 'admin' || user?.role === 'supervisor';
+  const [cancelVisitId, setCancelVisitId] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
   const [visits, setVisits] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
@@ -81,154 +88,209 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
   };
 
   const toggleCheckItem = async (item: any) => {
-    const updated = await apiFetch(`/visits/${selectedVisit.id}/checklist/${item.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ completed: !item.completed }),
-    });
-    setChecklist(updated);
-    loadAll();
+    try {
+      const updated = await apiFetch<any>(`/visits/${selectedVisit.id}/checklist/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ completed: !item.completed }),
+      });
+      if (Array.isArray(updated)) setChecklist(updated);
+      void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao atualizar checklist.');
+    }
   };
 
   const addCustomCheckItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCheckItem.trim()) return;
-    const updated = await apiFetch(`/visits/${selectedVisit.id}/checklist`, {
-      method: 'POST',
-      body: JSON.stringify({ label: newCheckItem }),
-    });
-    setChecklist(updated);
-    setNewCheckItem('');
-    loadAll();
+    try {
+      const updated = await apiFetch<any>(`/visits/${selectedVisit.id}/checklist`, {
+        method: 'POST',
+        body: JSON.stringify({ label: newCheckItem }),
+      });
+      if (Array.isArray(updated)) setChecklist(updated);
+      setNewCheckItem('');
+      void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao adicionar item.');
+    }
   };
 
   const handleCheckin = async (visitId: number) => {
-    let coords: { lat?: number; lng?: number } = {};
-    if (navigator.geolocation) {
-      await new Promise<void>((resolve) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => { coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; resolve(); },
-          () => resolve(),
-          { timeout: 2500 }
-        );
-      });
+    try {
+      let coords: { lat?: number; lng?: number } = {};
+      if (navigator.geolocation) {
+        await new Promise<void>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => { coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; resolve(); },
+            () => resolve(),
+            { timeout: 2500 }
+          );
+        });
+      }
+      await apiFetch(`/visits/${visitId}/checkin`, { method: 'POST', body: JSON.stringify(coords) });
+      toast('ok', 'Check-in realizado!');
+      await loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao realizar check-in.');
     }
-    await apiFetch(`/visits/${visitId}/checkin`, { method: 'POST', body: JSON.stringify(coords) });
-    await loadAll();
   };
 
   const handleCheckout = async (visitId: number) => {
-    await apiFetch(`/visits/${visitId}/checkout`, { method: 'POST', body: JSON.stringify(checkoutNotes) });
-    setSelectedVisit(null);
-    await loadAll();
+    try {
+      await apiFetch(`/visits/${visitId}/checkout`, { method: 'POST', body: JSON.stringify(checkoutNotes) });
+      setSelectedVisit(null);
+      toast('ok', 'Visita finalizada com sucesso!');
+      await loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Não foi possível finalizar a visita.');
+    }
   };
 
-  const handleCancelVisit = async (visitId: number) => {
-    const reason = prompt('Motivo do cancelamento da visita (opcional):');
-    if (reason === null) return;
-    await apiFetch(`/visits/${visitId}/cancel`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
-    if (selectedVisit?.id === visitId) setSelectedVisit(null);
-    await loadAll();
+  const confirmCancelVisit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelVisitId) return;
+    try {
+      await apiFetch(`/visits/${cancelVisitId}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: cancelReason }),
+      });
+      if (selectedVisit?.id === cancelVisitId) setSelectedVisit(null);
+      setCancelVisitId(null);
+      setCancelReason('');
+      toast('ok', 'Visita cancelada.');
+      await loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao cancelar visita.');
+    }
   };
 
   const handleUploadVisitPhoto = async () => {
     if (!visitPhoto || !selectedVisit) return;
-    const fd = new FormData();
-    fd.append('photo', visitPhoto);
-    fd.append('caption', 'Registro de visita no PDV');
-    await apiFetch(`/visits/${selectedVisit.id}/photos`, { method: 'POST', body: fd });
-    setVisitPhoto(null);
-    alert('Foto anexada à visita e enviada ao Telegram!');
-    loadAll();
+    try {
+      const fd = new FormData();
+      fd.append('photo', visitPhoto);
+      fd.append('caption', 'Registro de visita no PDV');
+      const res = await apiFetch<any>(`/visits/${selectedVisit.id}/photos`, { method: 'POST', body: fd });
+      setVisitPhoto(null);
+      toast('ok', res?.offlineQueued ? 'Foto salva na fila offline!' : 'Foto anexada à visita e enviada ao Telegram!');
+      if (!res?.offlineQueued) void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao enviar foto.');
+    }
   };
 
   const handleSubmitDisplay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVisit) return;
-    const fd = new FormData();
-    fd.append('visit_id', String(selectedVisit.id));
-    fd.append('store_id', String(selectedVisit.store_id));
-    fd.append('exposure_type', expForm.exposure_type);
-    fd.append('category', expForm.category);
-    if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
-    fd.append('facings_actual', expForm.facings_actual);
-    fd.append('facings_expected', expForm.facings_expected);
-    fd.append('notes', expForm.notes);
-    if (expBefore) fd.append('photo_before', expBefore);
-    if (expAfter) fd.append('photo_after', expAfter);
-    await apiFetch('/displays', { method: 'POST', body: fd });
-    setExpBefore(null);
-    setExpAfter(null);
-    setExpForm((f) => ({ ...f, notes: '' }));
-    alert('Exposição registrada e fotos enviadas ao Telegram!');
+    try {
+      const fd = new FormData();
+      fd.append('visit_id', String(selectedVisit.id));
+      fd.append('store_id', String(selectedVisit.store_id));
+      fd.append('exposure_type', expForm.exposure_type);
+      fd.append('category', expForm.category);
+      if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
+      fd.append('facings_actual', expForm.facings_actual);
+      fd.append('facings_expected', expForm.facings_expected);
+      fd.append('notes', expForm.notes);
+      if (expBefore) fd.append('photo_before', expBefore);
+      if (expAfter) fd.append('photo_after', expAfter);
+      const res = await apiFetch<any>('/displays', { method: 'POST', body: fd });
+      setExpBefore(null);
+      setExpAfter(null);
+      setExpForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Exposição salva na fila offline!' : 'Exposição registrada e fotos enviadas!');
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar exposição.');
+    }
   };
 
   const handleSubmitPrice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVisit) return;
-    const fd = new FormData();
-    fd.append('visit_id', String(selectedVisit.id));
-    fd.append('store_id', String(selectedVisit.store_id));
-    fd.append('product_id', priceForm.product_id);
-    fd.append('gondola_price', priceForm.gondola_price);
-    fd.append('has_price_tag', String(priceForm.has_price_tag));
-    fd.append('notes', priceForm.notes);
-    if (pricePhoto) fd.append('photo', pricePhoto);
-    await apiFetch('/prices', { method: 'POST', body: fd });
-    setPricePhoto(null);
-    setPriceForm((f) => ({ ...f, gondola_price: '', notes: '' }));
-    alert('Precificação registrada e foto enviada ao Telegram!');
+    try {
+      const fd = new FormData();
+      fd.append('visit_id', String(selectedVisit.id));
+      fd.append('store_id', String(selectedVisit.store_id));
+      fd.append('product_id', priceForm.product_id);
+      fd.append('gondola_price', priceForm.gondola_price);
+      fd.append('has_price_tag', String(priceForm.has_price_tag));
+      fd.append('notes', priceForm.notes);
+      if (pricePhoto) fd.append('photo', pricePhoto);
+      const res = await apiFetch<any>('/prices', { method: 'POST', body: fd });
+      setPricePhoto(null);
+      setPriceForm((f) => ({ ...f, gondola_price: '', notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Precificação salva na fila offline!' : 'Precificação registrada!');
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar preço.');
+    }
   };
 
   const handleSubmitCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVisit || !campForm.campaign_id) {
-      alert('Cadastre uma campanha em Campanhas primeiro.');
+      toast('info', 'Cadastre uma campanha em Campanhas primeiro.');
       return;
     }
-    const fd = new FormData();
-    fd.append('visit_id', String(selectedVisit.id));
-    fd.append('store_id', String(selectedVisit.store_id));
-    fd.append('compliant', 'true');
-    fd.append('notes', campForm.notes);
-    if (campPhoto) fd.append('photo', campPhoto);
-    await apiFetch(`/campaigns/${campForm.campaign_id}/execute`, { method: 'POST', body: fd });
-    setCampPhoto(null);
-    setCampForm((f) => ({ ...f, notes: '' }));
-    alert('Comprovação de campanha registrada e enviada ao Telegram!');
+    try {
+      const fd = new FormData();
+      fd.append('visit_id', String(selectedVisit.id));
+      fd.append('store_id', String(selectedVisit.store_id));
+      fd.append('compliant', 'true');
+      fd.append('notes', campForm.notes);
+      if (campPhoto) fd.append('photo', campPhoto);
+      const res = await apiFetch<any>(`/campaigns/${campForm.campaign_id}/execute`, { method: 'POST', body: fd });
+      setCampPhoto(null);
+      setCampForm((f) => ({ ...f, notes: '' }));
+      toast('ok', res?.offlineQueued ? 'Campanha salva na fila offline!' : 'Comprovação de campanha registrada!');
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao comprovar campanha.');
+    }
   };
 
   const handleSubmitOccurrence = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVisit) return;
-    const fd = new FormData();
-    fd.append('visit_id', String(selectedVisit.id));
-    fd.append('store_id', String(selectedVisit.store_id));
-    fd.append('type', occForm.type);
-    fd.append('priority', occForm.priority);
-    fd.append('description', occForm.description);
-    if (occPhoto) fd.append('photo', occPhoto);
-    await apiFetch('/occurrences', { method: 'POST', body: fd });
-    setOccPhoto(null);
-    setOccForm((f) => ({ ...f, description: '' }));
-    alert('Ocorrência registrada e foto enviada ao Telegram!');
+    try {
+      const fd = new FormData();
+      fd.append('visit_id', String(selectedVisit.id));
+      fd.append('store_id', String(selectedVisit.store_id));
+      fd.append('type', occForm.type);
+      fd.append('priority', occForm.priority);
+      fd.append('description', occForm.description);
+      if (occPhoto) fd.append('photo', occPhoto);
+      const res = await apiFetch<any>('/occurrences', { method: 'POST', body: fd });
+      setOccPhoto(null);
+      setOccForm((f) => ({ ...f, description: '' }));
+      toast('ok', res?.offlineQueued ? 'Ocorrência salva na fila offline!' : 'Ocorrência registrada!');
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao registrar ocorrência.');
+    }
   };
 
   const createVisit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/visits', { method: 'POST', body: JSON.stringify({ ...newVisit, store_id: Number(newVisit.store_id) }) });
-    setShowNewVisit(false);
-    loadAll();
+    try {
+      await apiFetch('/visits', { method: 'POST', body: JSON.stringify({ ...newVisit, store_id: Number(newVisit.store_id) }) });
+      setShowNewVisit(false);
+      toast('ok', 'Visita agendada!');
+      void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao agendar visita.');
+    }
   };
 
   const createRoute = async (e: React.FormEvent) => {
     e.preventDefault();
-    await apiFetch('/routes', { method: 'POST', body: JSON.stringify(newRoute) });
-    setShowNewRoute(false);
-    setNewRoute({ name: '', region: 'Zona Sul', day_of_week: 'Segunda-feira', store_ids: [], notes: '' });
-    loadAll();
+    try {
+      await apiFetch('/routes', { method: 'POST', body: JSON.stringify(newRoute) });
+      setShowNewRoute(false);
+      setNewRoute({ name: '', region: 'Zona Sul', day_of_week: 'Segunda-feira', store_ids: [], notes: '' });
+      toast('ok', 'Rota criada com sucesso!');
+      void loadAll();
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao criar rota.');
+    }
   };
 
   if (mode === 'roteiros') {
@@ -240,9 +302,11 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
             <h1 className="text-xl font-extrabold text-slate-900">Roteirização e Produtividade</h1>
             <p className="text-sm text-slate-500">Planejamento semanal, organização por região/proximidade e controle de tempo</p>
           </div>
-          <button onClick={() => setShowNewRoute(!showNewRoute)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
-            <Plus className="w-4 h-4" /> Nova Rota
-          </button>
+          {isManager && (
+            <button onClick={() => setShowNewRoute(!showNewRoute)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
+              <Plus className="w-4 h-4" /> Nova Rota
+            </button>
+          )}
         </div>
 
         {showNewRoute && (
@@ -400,7 +464,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                     <ListChecks className="w-3.5 h-3.5" /> Checklist & Detalhes
                   </button>
                   {(v.status === 'Pendente' || v.status === 'Em Andamento') && (
-                    <button onClick={() => handleCancelVisit(v.id)} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1">
+                    <button onClick={() => { setCancelVisitId(v.id); setCancelReason(''); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1">
                       <XCircle className="w-3.5 h-3.5" /> Cancelar Visita
                     </button>
                   )}
@@ -471,7 +535,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
 
                 {activeActionTab === 'foto' && (
                   <div className="space-y-2">
-                    <PhotoInput label="Foto da Visita" onFileSelect={setVisitPhoto} />
+                    <PhotoInput label="Foto da Visita" file={visitPhoto} onFileSelect={setVisitPhoto} />
                     {visitPhoto && (
                       <button onClick={handleUploadVisitPhoto} className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1">
                         <Camera className="w-3.5 h-3.5" /> Enviar Foto da Visita
@@ -491,8 +555,8 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                       </select>
                     </div>
                     <input placeholder="Categoria (ex: Salgadinhos)" value={expForm.category} onChange={(e) => setExpForm({ ...expForm, category: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
-                    <PhotoInput label="Foto ANTES" onFileSelect={setExpBefore} />
-                    <PhotoInput label="Foto DEPOIS" onFileSelect={setExpAfter} />
+                    <PhotoInput label="Foto ANTES" file={expBefore} onFileSelect={setExpBefore} />
+                    <PhotoInput label="Foto DEPOIS" file={expAfter} onFileSelect={setExpAfter} />
                     <input placeholder="Observação..." value={expForm.notes} onChange={(e) => setExpForm({ ...expForm, notes: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">Salvar Exposição</button>
                   </form>
@@ -513,7 +577,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                         Com etiqueta
                       </label>
                     </div>
-                    <PhotoInput label="Foto da Etiqueta / Preço" onFileSelect={setPricePhoto} />
+                    <PhotoInput label="Foto da Etiqueta / Preço" file={pricePhoto} onFileSelect={setPricePhoto} />
                     <input placeholder="Observação..." value={priceForm.notes} onChange={(e) => setPriceForm({ ...priceForm, notes: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">Registrar Preço</button>
                   </form>
@@ -524,7 +588,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                     <select value={campForm.campaign_id} onChange={(e) => setCampForm({ ...campForm, campaign_id: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs">
                       {campaigns.length === 0 ? <option value="">Nenhuma campanha ativa</option> : campaigns.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
                     </select>
-                    <PhotoInput label="Foto de Comprovação da Campanha" onFileSelect={setCampPhoto} />
+                    <PhotoInput label="Foto de Comprovação da Campanha" file={campPhoto} onFileSelect={setCampPhoto} />
                     <input placeholder="Observações da campanha..." value={campForm.notes} onChange={(e) => setCampForm({ ...campForm, notes: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">Confirmar Campanha</button>
                   </form>
@@ -541,7 +605,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                       </select>
                     </div>
                     <textarea required placeholder="Descreva a ocorrência ou ruptura..." value={occForm.description} onChange={(e) => setOccForm({ ...occForm, description: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" rows={2} />
-                    <PhotoInput label="Foto da Ocorrência" onFileSelect={setOccPhoto} />
+                    <PhotoInput label="Foto da Ocorrência" file={occPhoto} onFileSelect={setOccPhoto} />
                     <button type="submit" className="w-full py-2 bg-red-600 text-white text-xs font-bold rounded-xl">Registrar Ocorrência</button>
                   </form>
                 )}
@@ -584,6 +648,29 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
           )}
         </div>
       </div>
+
+      {cancelVisitId !== null && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={confirmCancelVisit} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+            <h2 className="font-bold text-slate-900">Cancelar Visita #{cancelVisitId}</h2>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Informe o motivo do cancelamento (opcional)..."
+              className="w-full px-3 py-2 border rounded-xl text-sm"
+              rows={3}
+            />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setCancelVisitId(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold">
+                Voltar
+              </button>
+              <button type="submit" className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-bold">
+                Confirmar Cancelamento
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

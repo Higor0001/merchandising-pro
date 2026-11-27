@@ -33,6 +33,7 @@ async function sendPhotoToTelegram({ filePath, reason, storeName, promoterName, 
     const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: 'POST',
       body: formData,
+      signal: AbortSignal.timeout(12000),
     });
 
     if (!response.ok) {
@@ -67,6 +68,7 @@ async function sendMessageToTelegram({ text }) {
         chat_id: chatId,
         text: text.slice(0, 4096),
       }),
+      signal: AbortSignal.timeout(12000),
     });
 
     if (!response.ok) {

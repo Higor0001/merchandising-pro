@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { Store, Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
+const IS_DEV = import.meta.env.DEV;
+
 export const LoginPage: React.FC = () => {
   const { login, loading } = useAuth();
-  const [email, setEmail] = useState('promotor@merchandising.com');
-  const [password, setPassword] = useState('123456');
+  const [email, setEmail] = useState(IS_DEV ? 'promotor@merchandising.com' : '');
+  const [password, setPassword] = useState(IS_DEV ? '123456' : '');
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,6 +21,7 @@ export const LoginPage: React.FC = () => {
   };
 
   const quickFill = (roleEmail: string) => {
+    if (!IS_DEV) return;
     setEmail(roleEmail);
     setPassword('123456');
   };
@@ -48,6 +51,8 @@ export const LoginPage: React.FC = () => {
               <input
                 type="email"
                 required
+                autoComplete="username"
+                placeholder="seu.email@empresa.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -62,6 +67,8 @@ export const LoginPage: React.FC = () => {
               <input
                 type="password"
                 required
+                autoComplete="current-password"
+                placeholder="Digite sua senha"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -79,32 +86,36 @@ export const LoginPage: React.FC = () => {
           </button>
         </form>
 
-        <div className="pt-4 border-t border-slate-100">
-          <div className="text-xs font-semibold text-slate-400 uppercase mb-2 text-center">Perfis de Acesso Rápido</div>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => quickFill('promotor@merchandising.com')}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
-            >
-              Promotor
-            </button>
-            <button
-              type="button"
-              onClick={() => quickFill('supervisor@merchandising.com')}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
-            >
-              Supervisor
-            </button>
-            <button
-              type="button"
-              onClick={() => quickFill('admin@merchandising.com')}
-              className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
-            >
-              Admin
-            </button>
+        {IS_DEV && (
+          <div className="pt-4 border-t border-slate-100">
+            <div className="text-xs font-semibold text-slate-400 uppercase mb-2 text-center">
+              Perfis de Acesso Rápido (Somente DEV)
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => quickFill('promotor@merchandising.com')}
+                className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
+              >
+                Promotor
+              </button>
+              <button
+                type="button"
+                onClick={() => quickFill('supervisor@merchandising.com')}
+                className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
+              >
+                Supervisor
+              </button>
+              <button
+                type="button"
+                onClick={() => quickFill('admin@merchandising.com')}
+                className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-700 text-xs font-semibold transition"
+              >
+                Admin
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

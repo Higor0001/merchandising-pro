@@ -22,6 +22,7 @@ async function si5Request(path) {
       Accept: 'application/json',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MerchandisingPro/1.0',
     },
+    signal: AbortSignal.timeout(12000),
   });
 
   if (res.status === 401) throw new Error('Token SI5 Global inválido ou expirado.');
