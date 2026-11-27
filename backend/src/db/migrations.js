@@ -28,6 +28,7 @@ async function runIncrementalMigrations() {
             'migration_pepsico_catalog_v2',
             'migration_dedup_pepsico_v3',
             'migration_clear_history_site_only_v1',
+            'migration_clean_pack_names_v4',
           ],
         },
       })
@@ -422,6 +423,71 @@ async function runIncrementalMigrations() {
         { $set: { seq: collectionsToClear.length, migrated_at: clearedAt } },
         { upsert: true }
       );
+    }
+
+    // 7. Remoção de combos/kits/caixas/fardos com quantitativo no nome e padronização para apenas produto + gramatura (bulkWrite < 0.3s)
+    const alreadyCleanedPacksV4 = doneSet.has('migration_clean_pack_names_v4');
+    if (!alreadyCleanedPacksV4) {
+      const pepsicoCatalog = getPepsicoCatalog();
+      if (Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+        const productsCol = await col('products');
+        const migratedAt = nowStr();
+        const canonicalByEan = new Map(pepsicoCatalog.map((item) => [String(item.ean || '').trim(), item]));
+
+        const allActive = await productsCol
+          .find({ active: { $ne: 0 } }, { projection: { _id: 0, id: 1, ean: 1, name: 1, weight: 1, source: 1 } })
+          .toArray();
+
+        const bulkOps = [];
+        let affected = 0;
+
+        for (const prod of allActive) {
+          const ean = String(prod.ean || '').trim();
+          const canonical = canonicalByEan.get(ean);
+          const isCatalogSource =
+            !prod.source || ['si5', 'pepsico_catalog_v2', 'pepsico_2026', 'openfoodfacts'].includes(prod.source);
+
+          if (isCatalogSource && !canonical) {
+            bulkOps.push({
+              updateOne: {
+                filter: { id: prod.id },
+                update: {
+                  $set: {
+                    active: 0,
+                    deactivated_reason: 'Combo/Kit/Caixa de atacado removido (limpeza v4)',
+                    updated_at: migratedAt,
+                  },
+                },
+              },
+            });
+            affected++;
+          } else if (canonical && (canonical.name !== prod.name || (canonical.weight || '') !== (prod.weight || ''))) {
+            bulkOps.push({
+              updateOne: {
+                filter: { id: prod.id },
+                update: {
+                  $set: {
+                    name: canonical.name,
+                    weight: canonical.weight || prod.weight || '',
+                    updated_at: migratedAt,
+                  },
+                },
+              },
+            });
+            affected++;
+          }
+        }
+
+        if (bulkOps.length > 0) {
+          await productsCol.bulkWrite(bulkOps, { ordered: false });
+        }
+
+        await countersCol.updateOne(
+          { _id: 'migration_clean_pack_names_v4' },
+          { $set: { seq: affected, migrated_at: migratedAt } },
+          { upsert: true }
+        );
+      }
     }
   })().catch((err) => {
     migrationPromise = null;

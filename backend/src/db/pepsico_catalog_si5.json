@@ -48,18 +48,6 @@
     "image_url": "https://distribuidoracampos.com.br/wp-content/uploads/2025/01/7892840822798-1024x1024.png"
   },
   {
-    "ean": "17892840825116",
-    "name": "Salgadinho Baconzitos 36G C/10 Elmachips",
-    "brand": "Baconzitos",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "36 g",
-    "system_price": 0,
-    "ncm": "1905.90.90",
-    "cest_codigo": "1703100",
-    "image_url": "https://distribuidoracampos.com.br/wp-content/uploads/2025/01/7892840822798-600x600.png"
-  },
-  {
     "ean": "7892840818913",
     "name": "Salgadinho Baconzitos Elma Chips 28g",
     "brand": "Baconzitos",
@@ -190,18 +178,6 @@
     "ncm": "1905.90.90",
     "cest_codigo": "1703100",
     "image_url": "https://images.tcdn.com.br/img/img_prod/1176430/salgadinho_cebolitos_91g_pepsico_18913_1_e7bf91b5b4855706593e03a67ab01386.png"
-  },
-  {
-    "ean": "17892840825123",
-    "name": "Salgadinho Cebolitos 35G C/10 Elmachips",
-    "brand": "Cebolitos",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "35 g",
-    "system_price": 0,
-    "ncm": "1904.10.00",
-    "cest_codigo": "1703000",
-    "image_url": "https://phygital-files.mercafacil.com/padariabianchi/uploads/produto/salgadinho_elma_chips_cebolitos_36g_10a8c4ab-ef7d-4427-92ec-4cc96fa246c0.png"
   },
   {
     "ean": "7892840818470",
@@ -675,6 +651,19 @@
     "image_url": "https://pngimg.com/uploads/doritos/small/doritos_PNG13.png"
   },
   {
+    "ean": "7892840817923",
+    "name": "Doritos Queijo Nacho 140g",
+    "brand": "Doritos",
+    "category": "SNACKS & SALGADINHOS",
+    "unit": "UN",
+    "weight": "140 g",
+    "system_price": 0,
+    "ncm": "",
+    "cest_codigo": "",
+    "image_url": "https://images.openfoodfacts.org/images/products/789/284/081/7923/front_pt.3.400.jpg",
+    "source": "pepsico_2026"
+  },
+  {
     "ean": "7892840822347",
     "name": "DORITOS QUEIJO NACHO 75G ELMA CHIPS M",
     "brand": "Doritos",
@@ -727,7 +716,7 @@
   },
   {
     "ean": "7892840814526",
-    "name": "DORITOS SWEET CHILI 40X48G",
+    "name": "Doritos Sweet Chili 48g",
     "brand": "Doritos",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UN",
@@ -751,7 +740,7 @@
   },
   {
     "ean": "7892840815936",
-    "name": "DORITOS SWEET CHILLI 84G UNIDADE",
+    "name": "Doritos Sweet Chili 84g",
     "brand": "Doritos",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UN",
@@ -848,19 +837,6 @@
     "ncm": "",
     "cest_codigo": "",
     "image_url": "https://images.openfoodfacts.org/images/products/789/284/081/5912/front_pt.17.400.jpg",
-    "source": "pepsico_2026"
-  },
-  {
-    "ean": "7892840817923",
-    "name": "Salgadinho De Milho Queijo Nacho Doritos Pacote Leve 140g Pague 115g",
-    "brand": "Doritos",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "140 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://images.openfoodfacts.org/images/products/789/284/081/7923/front_pt.3.400.jpg",
     "source": "pepsico_2026"
   },
   {
@@ -1241,7 +1217,7 @@
   },
   {
     "ean": "7892840816438",
-    "name": "FANDANGOS PRESUNTO 45G UNIDADE",
+    "name": "Fandangos Presunto 45g",
     "brand": "Fandangos",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UN",
@@ -1289,7 +1265,7 @@
   },
   {
     "ean": "7892840816452",
-    "name": "FANDANGOS QUEIJO 45G UNIDADE",
+    "name": "Fandangos Queijo 45g",
     "brand": "Fandangos",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UN",
@@ -1902,18 +1878,6 @@
     "image_url": "https://adegabrooklin.com.br/wp-content/uploads/2022/11/Kero-coco-1-litrook-800x800.png"
   },
   {
-    "ean": "7896828000499",
-    "name": "Água De Coco Reconstituída Kero Coco Caixa 330mL 12 Unidades",
-    "brand": "Kero Coco",
-    "category": "BEBIDAS",
-    "unit": "UN",
-    "weight": "330 ml",
-    "system_price": 0,
-    "ncm": "20098990",
-    "cest_codigo": "1701100",
-    "image_url": "https://adegabrooklin.com.br/wp-content/uploads/2022/10/Kero-Coco-300-ml-1024x1024.png"
-  },
-  {
     "ean": "7892840820640",
     "name": "Batata Frita Rústica Cream Cheese Lays Pacote 68g",
     "brand": "Lay’s",
@@ -2040,6 +2004,18 @@
     "source": "pepsico_2026"
   },
   {
+    "ean": "7892840817947",
+    "name": "Lay’s Clássica 45g",
+    "brand": "Lay’s",
+    "category": "SNACKS & SALGADINHOS",
+    "unit": "UN",
+    "weight": "45 g",
+    "system_price": 0,
+    "ncm": "20052000",
+    "cest_codigo": "",
+    "image_url": "https://www.reinobrilhante.pt/imagens/produtos/20260413035142_resize.png"
+  },
+  {
     "ean": "7892840824891",
     "name": "Lay’s Sabor Tacos Mexicanos 62g",
     "brand": "Lay’s",
@@ -2051,6 +2027,18 @@
     "cest_codigo": "",
     "image_url": "",
     "source": "pepsico_2026"
+  },
+  {
+    "ean": "7892840814571",
+    "name": "Lay’s Sour Cream 86g",
+    "brand": "Lay’s",
+    "category": "SNACKS & SALGADINHOS",
+    "unit": "UN",
+    "weight": "86 g",
+    "system_price": 0,
+    "ncm": "20052000",
+    "cest_codigo": "",
+    "image_url": "https://static.vecteezy.com/system/resources/thumbnails/054/314/904/small_2x/bag-of-lays-sour-cream-dell-potato-chips-free-png.png"
   },
   {
     "ean": "7892840825195",
@@ -2066,18 +2054,6 @@
     "source": "pepsico_2026"
   },
   {
-    "ean": "7892840817947",
-    "name": "LAYS SAL CLASSICA 45G UNIDADE",
-    "brand": "Lay’s",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "45 g",
-    "system_price": 0,
-    "ncm": "20052000",
-    "cest_codigo": "",
-    "image_url": "https://www.reinobrilhante.pt/imagens/produtos/20260413035142_resize.png"
-  },
-  {
     "ean": "7892840820633",
     "name": "lays sal marinho 68g",
     "brand": "Lay’s",
@@ -2089,18 +2065,6 @@
     "cest_codigo": "",
     "image_url": "https://images.openfoodfacts.org/images/products/789/284/082/0633/front_pt.25.400.jpg",
     "source": "pepsico_2026"
-  },
-  {
-    "ean": "7892840814571",
-    "name": "LAYS SOUR CREAM 24X86G",
-    "brand": "Lay’s",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "86 g",
-    "system_price": 0,
-    "ncm": "20052000",
-    "cest_codigo": "",
-    "image_url": "https://static.vecteezy.com/system/resources/thumbnails/054/314/904/small_2x/bag-of-lays-sour-cream-dell-potato-chips-free-png.png"
   },
   {
     "ean": "7892840819613",
@@ -2163,42 +2127,6 @@
     "ncm": "22021000",
     "cest_codigo": "",
     "image_url": "https://uk.foodplus.eu/userdata/public/gfx/20069/6489.png"
-  },
-  {
-    "ean": "7897791551704",
-    "name": "Chá Lipton Limão Lata 340ml (12 Latas)",
-    "brand": "Lipton",
-    "category": "BEBIDAS",
-    "unit": "UN",
-    "weight": "340 ml",
-    "system_price": 0,
-    "ncm": "2202.10.00",
-    "cest_codigo": "",
-    "image_url": "https://hiperideal.vtexassets.com/arquivos/ids/235509/2204394.png?v=639142005998330000"
-  },
-  {
-    "ean": "7897791551667",
-    "name": "Chá Lipton Limão Pet 1,5 Litro (12 Garrafas)",
-    "brand": "Lipton",
-    "category": "BEBIDAS",
-    "unit": "UN",
-    "weight": "1,5 L",
-    "system_price": 0,
-    "ncm": "2202.10.00",
-    "cest_codigo": "",
-    "image_url": "https://storage.googleapis.com/liquidos-public/products/large/1115013.png"
-  },
-  {
-    "ean": "7897791551711",
-    "name": "Chá Lipton Pessego Lata 340Ml (12 Latas)",
-    "brand": "Lipton",
-    "category": "BEBIDAS",
-    "unit": "UN",
-    "weight": "340 ml",
-    "system_price": 0,
-    "ncm": "2202.10.00",
-    "cest_codigo": "",
-    "image_url": "https://hiperideal.vtexassets.com/arquivos/ids/235508/2204393.png?v=639142005711530000"
   },
   {
     "ean": "7892840806835",
@@ -2443,20 +2371,8 @@
     "source": "pepsico_2026"
   },
   {
-    "ean": "7794447348339",
-    "name": "Pingo Douro Bacon Caixa Com 5 Unidades De 30g Pepsico",
-    "brand": "Pingo d’Ouro",
-    "category": "BEBIDAS",
-    "unit": "UN",
-    "weight": "30 g",
-    "system_price": 0,
-    "ncm": "1905.90.90",
-    "cest_codigo": "",
-    "image_url": "https://images.tcdn.com.br/img/img_prod/1176430/pingo_d_ouro_160g_bacon_23733_1_44fdfa730ed8edc11f7dcc3f4696e02f.png"
-  },
-  {
     "ean": "7892840814670",
-    "name": "PINGO DOURO PICANHA 35G UNIDADE",
+    "name": "Pingo d’Ouro Picanha 35g",
     "brand": "Pingo d’Ouro",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UNI",
@@ -2529,20 +2445,8 @@
     "image_url": "https://assets.ibecom.com.br/ib.item.image.large/l-5e78f6fba2bb4f2cb6290582a8a86499.png"
   },
   {
-    "ean": "893594002044",
-    "name": "Popcorners 5 Flavor Variety Pack Bags",
-    "brand": "PopCorners",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "Unidade",
-    "weight": "",
-    "system_price": 0,
-    "ncm": "19041000",
-    "cest_codigo": "1703000",
-    "image_url": "https://www.tastyrewards.com/sites/default/files/2024-03/CPK00875_PopCorners_15ct.png"
-  },
-  {
     "ean": "810607023551",
-    "name": "POPCORNERS NATURAL POPPED CORN CHIPS 1 1 OUNCE PACKAGE SWEET CHILI FLAVOR PACK",
+    "name": "PopCorners Sweet Chili 28g",
     "brand": "PopCorners",
     "category": "SNACKS & SALGADINHOS",
     "unit": "UN",
@@ -2653,7 +2557,7 @@
   },
   {
     "ean": "7894321238821",
-    "name": "Barra Quaker Damasco Ameixa20g",
+    "name": "Barra Quaker Damasco e Ameixa 20g",
     "brand": "Quaker",
     "category": "CEREAIS & MATINAIS",
     "unit": "Unidade",
@@ -3041,19 +2945,6 @@
     "source": "pepsico_2026"
   },
   {
-    "ean": "7892840818166",
-    "name": "Batata Frita Ondulada Original Elma Chips Ruffles Pacote Leve 115g Pague 101g",
-    "brand": "Ruffles",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "115 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "",
-    "source": "pepsico_2026"
-  },
-  {
     "ean": "7892840818210",
     "name": "Batata Frita Ondulada Sabor Churrasco - Ruffles 76g",
     "brand": "Ruffles",
@@ -3226,6 +3117,19 @@
     "ncm": "",
     "cest_codigo": "",
     "image_url": "https://images.openfoodfacts.org/images/products/789/284/082/3047/front_pt.8.400.jpg",
+    "source": "pepsico_2026"
+  },
+  {
+    "ean": "7892840818166",
+    "name": "Ruffles Original 115g",
+    "brand": "Ruffles",
+    "category": "SNACKS & SALGADINHOS",
+    "unit": "UN",
+    "weight": "115 g",
+    "system_price": 0,
+    "ncm": "",
+    "cest_codigo": "",
+    "image_url": "",
     "source": "pepsico_2026"
   },
   {
@@ -3433,54 +3337,6 @@
     "image_url": "https://multicanalatacado.agilecdn.com.br/486394.png"
   },
   {
-    "ean": "7803763068576",
-    "name": "Skiny Salgadinho Sabor Presunto Com 10 Unidades-38gr",
-    "brand": "Skiny",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "38 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://apoioentrega.vteximg.com.br/arquivos/ids/658429-1000-1000/228694.png?v=638520477542970000"
-  },
-  {
-    "ean": "79000054103450",
-    "name": "10x Palitinho Salgado Elma Chips Stiksy 160g",
-    "brand": "Stiksy",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "160 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://distribuidoracampos.com.br/wp-content/uploads/2025/01/7892840822613-1024x1024.png"
-  },
-  {
-    "ean": "7794447308364",
-    "name": "40 Salgadinho Elma Chips Stiksy 30g Palitinho Trigo",
-    "brand": "Stiksy",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "30 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://supernossoio.vtexassets.com/arquivos/ids/445243/197586_0.png?v=638550220621470000"
-  },
-  {
-    "ean": "7794447308296",
-    "name": "Combo 50 Salgadinho Elma Chips Stiksy 30g Palitinho Trigo",
-    "brand": "Stiksy",
-    "category": "SNACKS & SALGADINHOS",
-    "unit": "UN",
-    "weight": "30 g",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://supernossoio.vtexassets.com/arquivos/ids/445243/197586_0.png?v=638550220621470000"
-  },
-  {
     "ean": "17892840814769",
     "name": "PALITINHO DE TRIGO ELMA CHIPS STIKSY CLÁSSICOS PACOTE 130G",
     "brand": "Stiksy",
@@ -3576,18 +3432,6 @@
     "cest_codigo": "",
     "image_url": "https://images.openfoodfacts.org/images/products/789/284/081/8029/front_pt.9.400.jpg",
     "source": "pepsico_2026"
-  },
-  {
-    "ean": "7898962676226",
-    "name": "Achoc.toddy 800g Orig.pote C/2 1copo Exclusivo",
-    "brand": "Toddy",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "Unidade",
-    "weight": "800 g",
-    "system_price": 0,
-    "ncm": "18069000",
-    "cest_codigo": "",
-    "image_url": "https://www.georgalosventas.com/wp-content/uploads/2022/05/jpeg-optimizer_2342-Toddy-Cacao-En-Polvo-800g.png.png"
   },
   {
     "ean": "7892840819507",
@@ -3703,18 +3547,6 @@
     "image_url": "https://www.georgalosventas.com/wp-content/uploads/2023/06/jpeg-optimizer_2348-Mini-Toddy-Galletas-x50g-Octogonos.png"
   },
   {
-    "ean": "7892840816667",
-    "name": "KIT DE ACHOCOLATADO EM PÓ ORIGINAL TODDY POTE 800G + ACHOCOLATADO EM PÓ CARAMELO TODDY POTE 300G GRÁTIS COPO EXCLUSIVO",
-    "brand": "Toddy",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "800 g",
-    "system_price": 0,
-    "ncm": "18069000",
-    "cest_codigo": "1700400",
-    "image_url": "https://images.rappi.com.br/products/ea12b943-cbbf-4a49-b885-7feb2826118b.png"
-  },
-  {
     "ean": "7894321433585",
     "name": "Toddy 1kg Original",
     "brand": "Toddy",
@@ -3790,11 +3622,11 @@
   },
   {
     "ean": "7894321226620",
-    "name": "Toddy Cookies Extra 75gx16x4",
+    "name": "Toddy Cookies Extra 75g",
     "brand": "Toddy",
     "category": "ACHOCOLATADOS & BISCOITOS",
     "unit": "Unidade",
-    "weight": "40 g",
+    "weight": "75 g",
     "system_price": 0,
     "ncm": "19053100",
     "cest_codigo": "",
@@ -3891,11 +3723,11 @@
   },
   {
     "ean": "7894321723013",
-    "name": "TODDY PRISMA 200",
+    "name": "Toddy Prisma 200ml",
     "brand": "Toddy",
     "category": "ACHOCOLATADOS & BISCOITOS",
     "unit": "UN",
-    "weight": "210 g",
+    "weight": "200 ml",
     "system_price": 0,
     "ncm": "22029900",
     "cest_codigo": "",
@@ -3961,30 +3793,6 @@
     "ncm": "04039000",
     "cest_codigo": "1702200",
     "image_url": "https://i.ibb.co/vxWsQ84K/Bebida-Lactea-UHT-Chocolate-Toddynho-Caixa-200ml-png.png"
-  },
-  {
-    "ean": "7800660786596",
-    "name": "Achocolatado Toddynho 200ml Caixa Com 27 Unidades - Atacado",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "200 ml",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://proalfa.com.br/wp-content/uploads/2024/06/image-removebg-preview-2024-07-06T102628.652.png"
-  },
-  {
-    "ean": "7892840825362",
-    "name": "Achocolatado Toddynho Levinho Caixa 1,8l Leve 9 Pague 8 Unidades de 200ml Emb Promocional",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "1,8 L",
-    "system_price": 0,
-    "ncm": "18069000",
-    "cest_codigo": "1700400",
-    "image_url": "https://assets.ibecom.com.br/ib.item.image.large/l-83e64f5a6d364214880bb48588b48eff.png"
   },
   {
     "ean": "7891072699260",
@@ -4059,54 +3867,6 @@
     "image_url": "https://i.ibb.co/vxWsQ84K/Bebida-Lactea-UHT-Chocolate-Toddynho-Caixa-200ml-png.png"
   },
   {
-    "ean": "7892840825430",
-    "name": "Bebida Láctea UHT Toddynho Levinho 200ml Com 6 Unidade e Brinde",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "200 ml",
-    "system_price": 0,
-    "ncm": "22021000",
-    "cest_codigo": "",
-    "image_url": "https://static.paodeacucar.com/img/uploads/1/626/19931626.png"
-  },
-  {
-    "ean": "7890011000327",
-    "name": "Caixa 10 Bebida Láctea Toddynho Tradicional Chocolate 200ml",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "200 ml",
-    "system_price": 0,
-    "ncm": "2202.99.00",
-    "cest_codigo": "",
-    "image_url": "https://i.ibb.co/vxWsQ84K/Bebida-Lactea-UHT-Chocolate-Toddynho-Caixa-200ml-png.png"
-  },
-  {
-    "ean": "7896139471032",
-    "name": "Kit 12 Unidades Toddynho 200ml",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "200 ml",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://www.br.joypepsico.com/prod/s3fs-public/2026-01/TODDYNHO24_REG_MKP_LIMPO (1).png"
-  },
-  {
-    "ean": "7894321235028",
-    "name": "Pack Bebida Láctea Uht Chocolate Toddynho Caixa 1,8l Leve 9 Pague 8 Unidades",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "Unidade",
-    "weight": "1,8 L",
-    "system_price": 0,
-    "ncm": "22029000",
-    "cest_codigo": "0301101",
-    "image_url": "https://esthampa.com.br/wp-content/uploads/2024/03/7209.png"
-  },
-  {
     "ean": "7894321722177",
     "name": "Toddynho Brigadeiro",
     "brand": "Toddynho",
@@ -4117,18 +3877,6 @@
     "ncm": "22029000",
     "cest_codigo": "0301101",
     "image_url": "https://7midias.com.br/wp-content/uploads/2020/07/7midias-blog-mascote-toddynho-300x294.png"
-  },
-  {
-    "ean": "7794689264985",
-    "name": "Toddynho de Chocolate Fardo Com 12 Unidades 200ml",
-    "brand": "Toddynho",
-    "category": "ACHOCOLATADOS & BISCOITOS",
-    "unit": "UN",
-    "weight": "200 ml",
-    "system_price": 0,
-    "ncm": "",
-    "cest_codigo": "",
-    "image_url": "https://embalandofestas.com.br/storage/products/fmTrt8TPUg5I0b29tvl8CpPSRWryeR-metadHJhbnNmZXJpcl8tXzIwMjQtMDktMjBUMDkxMzI3LjExNy1yZW1vdmViZy1wcmV2aWV3LnBuZw==-.png"
   },
   {
     "ean": "7892840822552",
