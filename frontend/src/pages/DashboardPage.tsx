@@ -44,7 +44,7 @@ export const DashboardPage: React.FC<{
     setDownloadingVisitId(visitId);
     try {
       const [report, exporter] = await Promise.all([
-        apiFetch<any>(`/visits/${visitId}/report`),
+        apiFetch<any>(`/visits/${visitId}/report?include_images=1`),
         import('../services/exportUtils'),
       ]);
       await exporter.exportVisitHistoryPDF(report);

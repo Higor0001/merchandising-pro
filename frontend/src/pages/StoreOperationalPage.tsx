@@ -184,7 +184,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     setDownloadingVisitId(visitId);
     try {
       const [report, exporter] = await Promise.all([
-        apiFetch<any>(`/visits/${visitId}/report`),
+        apiFetch<any>(`/visits/${visitId}/report${format === 'pdf' ? '?include_images=1' : ''}`),
         import('../services/exportUtils'),
       ]);
       if (format === 'pdf') {

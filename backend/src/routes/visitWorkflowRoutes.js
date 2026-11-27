@@ -1,6 +1,8 @@
 const express = require('express');
+const fs = require('node:fs');
 const path = require('node:path');
-const { col, nextId, nowStr } = require('../db/database');
+const sharp = require('sharp');
+const { col, nextId, nowStr, getGridFSBucket } = require('../db/database');
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
@@ -385,19 +387,236 @@ router.get('/visits/:id/workflow-state', async (req, res, next) => {
   }
 });
 
+async function loadPhotoBufferForPdf(photoUrl) {
+  if (!photoUrl || typeof photoUrl !== 'string') return null;
+  try {
+    if (/^https?:\/\//i.test(photoUrl)) {
+      const resp = await fetch(photoUrl, { signal: AbortSignal.timeout(8000) });
+      if (!resp.ok) return null;
+      return Buffer.from(await resp.arrayBuffer());
+    }
+    if (photoUrl.startsWith('/uploads/')) {
+      const safeName = path.basename(photoUrl);
+      const localPath = path.join(uploadDir, safeName);
+      if (fs.existsSync(localPath)) {
+        return await fs.promises.readFile(localPath);
+      }
+      const bucket = await getGridFSBucket();
+      const files = await bucket.find({ filename: safeName }).limit(1).toArray();
+      if (!files.length) return null;
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        bucket
+          .openDownloadStream(files[0]._id)
+          .on('data', (c) => chunks.push(c))
+          .on('end', resolve)
+          .on('error', reject);
+      });
+      return Buffer.concat(chunks);
+    }
+  } catch (err) {
+    console.warn('Aviso ao carregar foto para PDF:', err.message);
+  }
+  return null;
+}
+
+async function embedPhotoAsDataUrl(photoUrl, maxWidth = 760, quality = 76) {
+  const raw = await loadPhotoBufferForPdf(photoUrl);
+  if (!raw || raw.length === 0) return null;
+  try {
+    const pipeline = sharp(raw).rotate();
+    const meta = await pipeline.metadata();
+    const isPano = Number(meta.width) > 0 && Number(meta.height) > 0 && meta.width / meta.height >= 2.0;
+    const targetW = isPano ? Math.min(1200, maxWidth + 320) : maxWidth;
+    const resized = await pipeline
+      .resize({ width: targetW, height: targetW, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+
+    return {
+      data_url: `data:image/jpeg;base64,${resized.data.toString('base64')}`,
+      width: resized.info.width,
+      height: resized.info.height,
+      is_panoramic: isPano,
+    };
+  } catch (err) {
+    console.warn('Aviso ao converter foto para PDF:', err.message);
+    return null;
+  }
+}
+
 // --- 4B. DOSSIÊ COMPLETO DA VISITA PARA DOWNLOAD (PDF / EXCEL) ---
 router.get('/visits/:id/report', async (req, res, next) => {
   try {
     const vid = Number(req.params.id);
+    const includeImages = req.query.include_images === '1' || req.query.include_images === 'true';
     const visit = await (await col('visits')).findOne({ id: vid }, { projection: { _id: 0 } });
     if (!visit) return res.status(404).json({ error: 'Visita não encontrada.' });
 
-    const [store, promoter, checklist, summary] = await Promise.all([
+    const [store, promoter, checklist, summary, aiAnalyses, campExecs] = await Promise.all([
       (await col('stores')).findOne({ id: visit.store_id }, { projection: { _id: 0 } }),
       (await col('users')).findOne({ id: visit.promoter_id }, { projection: { _id: 0, id: 1, name: 1, role: 1 } }),
       (await col('visit_checklists')).find({ visit_id: vid }, { projection: { _id: 0 } }).sort({ id: 1 }).toArray(),
       buildOperationalSummary(vid, visit.store_id),
+      (await col('ai_analyses')).find({ visit_id: vid }, { projection: { _id: 0 } }).toArray(),
+      (await col('campaign_executions')).find({ visit_id: vid }, { projection: { _id: 0 } }).toArray(),
     ]);
+
+    // Consolidar TODAS as fotos da visita (evidências, legado photos_json, exposições, preços, ocorrências, campanhas e IA)
+    const seenUrls = new Set();
+    const gallery = [];
+    const addPhoto = (item) => {
+      const url = String(item?.photo_url || '').trim();
+      if (!url || seenUrls.has(url)) return;
+      seenUrls.add(url);
+      gallery.push({
+        photo_url: url,
+        stage: item.stage || 'REGISTRO',
+        stage_label: item.stage_label || item.stage || 'Registro Fotográfico',
+        area: item.area || 'PDV',
+        caption: item.caption || '',
+        captured_at: item.captured_at || '',
+        is_panoramic: Boolean(item.is_panoramic),
+      });
+    };
+
+    const evs = summary.evidences || {};
+    (evs.selfie_entrada || []).forEach((p) => addPhoto({ ...p, stage_label: 'Selfie na Entrada' }));
+    (evs.initial || []).forEach((p) => addPhoto({ ...p, stage_label: 'Foto Inicial (Antes)' }));
+    (evs.complementary || []).forEach((p) => addPhoto({ ...p, stage_label: 'Foto Complementar' }));
+    (evs.final || []).forEach((p) => addPhoto({ ...p, stage_label: 'Foto Final (Depois)' }));
+
+    try {
+      const legacyPhotos = JSON.parse(visit.photos_json || '[]');
+      if (Array.isArray(legacyPhotos)) {
+        legacyPhotos.forEach((p) =>
+          addPhoto({
+            photo_url: p.url,
+            stage: 'VISITA',
+            stage_label: 'Foto da Visita',
+            area: p.area || 'PDV',
+            caption: p.caption || '',
+            captured_at: p.created_at || '',
+            is_panoramic: Boolean(p.is_panoramic),
+          })
+        );
+      }
+    } catch {
+      // ignore malformed photos_json
+    }
+
+    (summary.displays || []).forEach((d) => {
+      if (d.photo_before) {
+        addPhoto({
+          photo_url: d.photo_before,
+          stage: 'EXPOSICAO_ANTES',
+          stage_label: 'Exposição (Antes)',
+          area: d.exposure_type || d.category || 'Exposição',
+          caption: d.notes || '',
+          captured_at: d.created_at || '',
+        });
+      }
+      if (d.photo_after) {
+        addPhoto({
+          photo_url: d.photo_after,
+          stage: 'EXPOSICAO_DEPOIS',
+          stage_label: 'Exposição (Depois)',
+          area: d.exposure_type || d.category || 'Exposição',
+          caption: d.notes || '',
+          captured_at: d.created_at || '',
+        });
+      }
+    });
+
+    (summary.price_checks || []).forEach((p) => {
+      if (p.photo_url) {
+        addPhoto({
+          photo_url: p.photo_url,
+          stage: 'PRECO',
+          stage_label: 'Precificação',
+          area: p.product_name || 'Etiqueta',
+          caption: p.notes || '',
+          captured_at: p.created_at || '',
+        });
+      }
+    });
+
+    (summary.occurrences || []).forEach((o) => {
+      if (o.photo_url) {
+        addPhoto({
+          photo_url: o.photo_url,
+          stage: 'OCORRENCIA',
+          stage_label: `Ocorrência (${o.type || 'PDV'})`,
+          area: o.product_name || o.type || 'Ocorrência',
+          caption: o.description || '',
+          captured_at: o.created_at || '',
+        });
+      }
+    });
+
+    campExecs.forEach((c) => {
+      if (c.photo_url) {
+        addPhoto({
+          photo_url: c.photo_url,
+          stage: 'CAMPANHA',
+          stage_label: 'Comprovação de Campanha',
+          area: 'Campanha',
+          caption: c.notes || '',
+          captured_at: c.executed_at || '',
+        });
+      }
+    });
+
+    aiAnalyses.forEach((a) => {
+      if (a.image_url) {
+        addPhoto({
+          photo_url: a.image_url,
+          stage: 'IA_ORIGINAL',
+          stage_label: 'Auditoria IA (Original)',
+          area: a.area || 'Gôndola',
+          caption: a.auto_report || '',
+          captured_at: a.created_at || '',
+          is_panoramic: Boolean(a.is_panoramic),
+        });
+      }
+      if (a.annotated_image_url) {
+        addPhoto({
+          photo_url: a.annotated_image_url,
+          stage: 'IA_DEMARCADA',
+          stage_label: 'Auditoria IA (Demarcada)',
+          area: a.area || 'Gôndola',
+          caption: a.auto_report || '',
+          captured_at: a.created_at || '',
+          is_panoramic: Boolean(a.is_panoramic),
+        });
+      }
+    });
+
+    // Embutir imagens em base64 direto no servidor (zero CORS, garantido no PDF no celular e desktop)
+    if (includeImages && gallery.length > 0) {
+      const compactMode = gallery.length > 18;
+      const maxW = compactMode ? 560 : 760;
+      const qual = compactMode ? 68 : 78;
+      const MAX_TOTAL_BYTES = 3_200_000;
+      let usedBytes = 0;
+
+      // Processar em lotes de 5 em paralelo para rapidez
+      for (let i = 0; i < gallery.length; i += 5) {
+        const batch = gallery.slice(i, i + 5);
+        const embedded = await Promise.all(
+          batch.map((item) => embedPhotoAsDataUrl(item.photo_url, maxW, qual))
+        );
+        embedded.forEach((emb, idx) => {
+          if (!emb?.data_url) return;
+          if (usedBytes + emb.data_url.length > MAX_TOTAL_BYTES) return;
+          usedBytes += emb.data_url.length;
+          batch[idx].data_url = emb.data_url;
+          batch[idx].width = emb.width;
+          batch[idx].height = emb.height;
+          if (emb.is_panoramic) batch[idx].is_panoramic = true;
+        });
+      }
+    }
 
     res.json({
       generated_at: nowStr(),
@@ -406,6 +625,7 @@ router.get('/visits/:id/report', async (req, res, next) => {
       promoter,
       checklist,
       summary,
+      photos: gallery,
     });
   } catch (err) {
     next(err);

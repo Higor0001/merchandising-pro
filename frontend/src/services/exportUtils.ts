@@ -98,6 +98,18 @@ export interface VisitReportPayload {
   promoter?: any;
   checklist?: any[];
   summary?: any;
+  photos?: Array<{
+    photo_url: string;
+    stage?: string;
+    stage_label?: string;
+    area?: string;
+    caption?: string;
+    captured_at?: string;
+    is_panoramic?: boolean;
+    data_url?: string;
+    width?: number;
+    height?: number;
+  }>;
 }
 
 /**
@@ -177,11 +189,13 @@ export async function exportVisitHistoryPDF(report: VisitReportPayload): Promise
   y += 3;
 
   const evs = summary.evidences || {};
-  const totalPhotos =
+  const totalPhotos = Math.max(
+    report.photos?.length || 0,
     (evs.selfie_entrada?.length || 0) +
-    (evs.initial?.length || 0) +
-    (evs.complementary?.length || 0) +
-    (evs.final?.length || 0);
+      (evs.initial?.length || 0) +
+      (evs.complementary?.length || 0) +
+      (evs.final?.length || 0)
+  );
 
   autoTable(doc, {
     startY: y,
@@ -364,68 +378,124 @@ export async function exportVisitHistoryPDF(report: VisitReportPayload): Promise
     y = ((doc as any).lastAutoTable?.finalY || y + 25) + 7;
   }
 
-  // 10. Evidências Fotográficas embutidas
-  const allEvidences = [
-    ...(evs.selfie_entrada || []).map((p: any) => ({ ...p, stageLabel: 'Selfie na Entrada' })),
-    ...(evs.initial || []).map((p: any) => ({ ...p, stageLabel: 'Foto Inicial (Antes)' })),
-    ...(evs.complementary || []).map((p: any) => ({ ...p, stageLabel: 'Foto Complementar' })),
-    ...(evs.final || []).map((p: any) => ({ ...p, stageLabel: 'Foto Final (Depois)' })),
+  // 10. Evidências Fotográficas embutidas em alta nitidez (usa base64 direto do servidor + fallback client)
+  const fallbackEvidences = [
+    ...(evs.selfie_entrada || []).map((p: any) => ({ ...p, stage_label: 'Selfie na Entrada' })),
+    ...(evs.initial || []).map((p: any) => ({ ...p, stage_label: 'Foto Inicial (Antes)' })),
+    ...(evs.complementary || []).map((p: any) => ({ ...p, stage_label: 'Foto Complementar' })),
+    ...(evs.final || []).map((p: any) => ({ ...p, stage_label: 'Foto Final (Depois)' })),
   ];
+  const allEvidences = Array.isArray(report.photos) && report.photos.length > 0 ? report.photos : fallbackEvidences;
 
   if (allEvidences.length > 0) {
-    ensureSpace(60);
+    ensureSpace(75);
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Evidências Fotográficas (${allEvidences.length})`, margin, y);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Evidências Fotográficas da Visita (${allEvidences.length})`, margin, y);
     y += 5;
 
-    const colW = (pageW - margin * 2 - 6) / 2;
-    const imgBoxH = 44;
+    const fullW = pageW - margin * 2;
+    const colW = (fullW - 6) / 2;
+    const stdBoxH = 60;
+    const panoBoxH = 54;
     let colIdx = 0;
 
-    for (const ev of allEvidences.slice(0, 16)) {
-      if (colIdx === 0) ensureSpace(imgBoxH + 14);
+    for (const ev of allEvidences) {
+      let dataUrl = ev.data_url || '';
+      let aspect = ev.width && ev.height ? ev.width / ev.height : 4 / 3;
+
+      if (!dataUrl && ev.photo_url) {
+        const loaded = await fetchImageAsJpegDataUrl(ev.photo_url);
+        if (loaded) {
+          dataUrl = loaded.dataUrl;
+          aspect = loaded.aspect;
+        }
+      }
+
+      const isPano = Boolean(ev.is_panoramic) || aspect >= 2.0;
+
+      if (isPano) {
+        // Se havia 1 foto pendente na coluna esquerda, fecha a linha antes da panorâmica full-width
+        if (colIdx === 1) {
+          colIdx = 0;
+          y += stdBoxH + 16;
+        }
+        ensureSpace(panoBoxH + 16);
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(margin, y, fullW, panoBoxH + 12, 2.5, 2.5, 'S');
+
+        if (dataUrl) {
+          const maxImgW = fullW - 4;
+          const maxImgH = panoBoxH - 2;
+          let drawW = maxImgW;
+          let drawH = drawW / aspect;
+          if (drawH > maxImgH) {
+            drawH = maxImgH;
+            drawW = drawH * aspect;
+          }
+          const offsetX = margin + 2 + (maxImgW - drawW) / 2;
+          const offsetY = y + 2 + (maxImgH - drawH) / 2;
+          doc.addImage(dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
+        } else {
+          doc.setFontSize(8);
+          doc.setTextColor(100, 116, 139);
+          doc.text('Imagem indisponível offline', margin + 5, y + 26);
+        }
+
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'} (Panorâmica)`.slice(0, 95);
+        doc.text(label, margin + 3, y + panoBoxH + 5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(String(ev.captured_at || ''), margin + 3, y + panoBoxH + 9.5);
+        y += panoBoxH + 16;
+        continue;
+      }
+
+      if (colIdx === 0) ensureSpace(stdBoxH + 16);
       const x = margin + colIdx * (colW + 6);
-      const loaded = await fetchImageAsJpegDataUrl(ev.photo_url);
 
-      doc.setDrawColor(226, 232, 240);
-      doc.roundedRect(x, y, colW, imgBoxH + 10, 2, 2, 'S');
+      doc.setDrawColor(203, 213, 225);
+      doc.roundedRect(x, y, colW, stdBoxH + 12, 2.5, 2.5, 'S');
 
-      if (loaded?.dataUrl) {
+      if (dataUrl) {
         const maxImgW = colW - 4;
-        const maxImgH = imgBoxH - 2;
+        const maxImgH = stdBoxH - 2;
         let drawW = maxImgW;
-        let drawH = drawW / loaded.aspect;
+        let drawH = drawW / aspect;
         if (drawH > maxImgH) {
           drawH = maxImgH;
-          drawW = drawH * loaded.aspect;
+          drawW = drawH * aspect;
         }
         const offsetX = x + 2 + (maxImgW - drawW) / 2;
         const offsetY = y + 2 + (maxImgH - drawH) / 2;
-        doc.addImage(loaded.dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
+        doc.addImage(dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
       } else {
         doc.setFontSize(7.5);
         doc.setTextColor(100, 116, 139);
-        doc.text('Imagem registrada no servidor', x + 4, y + 22);
+        doc.text('Imagem registrada no servidor', x + 4, y + 28);
       }
 
-      doc.setFontSize(7.5);
+      doc.setFontSize(8);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
-      const label = `${ev.stageLabel} • ${ev.area || 'PDV'}${ev.is_panoramic ? ' (Panorâmica)' : ''}`.slice(0, 52);
-      doc.text(label, x + 2.5, y + imgBoxH + 4.5);
+      const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'}`.slice(0, 50);
+      doc.text(label, x + 3, y + stdBoxH + 5);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 116, 139);
-      doc.text(String(ev.captured_at || ''), x + 2.5, y + imgBoxH + 8.5);
+      doc.text(String(ev.captured_at || ''), x + 3, y + stdBoxH + 9.5);
 
       colIdx++;
       if (colIdx === 2) {
         colIdx = 0;
-        y += imgBoxH + 14;
+        y += stdBoxH + 16;
       }
     }
     if (colIdx === 1) {
-      y += imgBoxH + 14;
+      y += stdBoxH + 16;
     }
   }
 
