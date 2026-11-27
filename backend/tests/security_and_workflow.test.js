@@ -12,6 +12,11 @@ const { hashPasswordAsync, verifyPasswordAsync } = require('../src/db/database')
 const { authorize } = require('../src/middleware/auth');
 const { imageFileFilter } = require('../src/middleware/upload');
 const { buildHeuristicFallback, extractJsonObject, normalizeVisionPayload } = require('../src/services/aiService');
+const { normalizeAnnotations, renderAnnotatedImage } = require('../src/services/imageAnnotator');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const sharp = require('sharp');
 
 test('escapeRegex escapa metacaracteres para evitar Regex Injection / ReDoS', () => {
   assert.equal(escapeRegex('Doritos (100g) [promo].*+?^${}|\\'), 'Doritos \\(100g\\) \\[promo\\]\\.\\*\\+\\?\\^\\$\\{\\}\\|\\\\');
@@ -100,4 +105,38 @@ test('aiService extrai JSON de markdown e rotula fallback heurístico corretamen
   assert.equal(heur.analysis_mode, 'heuristic_fallback');
   assert.equal(heur.confidence, 0);
   assert.match(heur.auto_report, /Modo Heurístico/);
+});
+
+test('imageAnnotator normaliza box_2d e gera imagem HD demarcada válida', async () => {
+  const norm = normalizeAnnotations([
+    { label: 'Ruptura Doritos', category: 'rupture', box_2d: [200, 150, 500, 480] },
+    { label: 'Bloco Cheetos', category: 'brand', box_2d: [10, 60, 40, 95] }, // escala 0..100
+  ]);
+  assert.equal(norm.length, 2);
+  assert.deepEqual(norm[0].box_2d, [200, 150, 500, 480]);
+  assert.deepEqual(norm[1].box_2d, [100, 600, 400, 950]);
+
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'merchpro-annot-'));
+  const srcPath = path.join(tmpDir, 'shelf.jpg');
+  await sharp({
+    create: { width: 1280, height: 720, channels: 3, background: { r: 40, g: 55, b: 80 } },
+  })
+    .jpeg({ quality: 90 })
+    .toFile(srcPath);
+
+  const rendered = await renderAnnotatedImage({
+    imagePath: srcPath,
+    annotations: norm,
+    outputDir: tmpDir,
+    planogramScore: 84,
+    storeName: 'Loja Teste',
+  });
+
+  assert.ok(rendered && fs.existsSync(rendered.annotatedPath));
+  const meta = await sharp(rendered.annotatedPath).metadata();
+  assert.equal(meta.width, 1280);
+  assert.equal(meta.height, 720);
+  assert.equal(meta.format, 'jpeg');
+
+  await fs.promises.rm(tmpDir, { recursive: true, force: true });
 });

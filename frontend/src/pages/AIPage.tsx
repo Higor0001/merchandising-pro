@@ -143,6 +143,7 @@ export const AIPage: React.FC = () => {
           const issues: string[] = safeParse(a.exposure_issues_json);
           const suggestions: string[] = safeParse(a.suggestions_json);
           const extraPoints: string[] = safeParse(a.extra_point_opportunities_json);
+          const annotations: Array<{ label: string; category: string; box_2d: number[] }> = safeParse(a.annotations_json);
 
           return (
             <div key={a.id} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
@@ -168,7 +169,53 @@ export const AIPage: React.FC = () => {
                 </div>
               </div>
 
-              {a.image_url && <img src={a.image_url} alt="Gôndola analisada" className="max-h-52 rounded-xl border object-cover" />}
+              {(a.image_url || a.annotated_image_url) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {a.image_url && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                        <span>Foto Original (HD)</span>
+                        <a href={a.image_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                          Abrir original
+                        </a>
+                      </div>
+                      <img src={a.image_url} alt="Gôndola original" className="w-full max-h-72 rounded-xl border object-contain bg-slate-950/5" />
+                    </div>
+                  )}
+                  {a.annotated_image_url && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs font-bold text-indigo-700">
+                        <span>Foto Demarcada pela IA ({annotations.length} área(s))</span>
+                        <a href={a.annotated_image_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
+                          Abrir demarcada (HD)
+                        </a>
+                      </div>
+                      <img src={a.annotated_image_url} alt="Gôndola demarcada pela IA" className="w-full max-h-72 rounded-xl border border-indigo-200 object-contain bg-slate-950/5" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {annotations.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {annotations.map((ann, idx) => (
+                    <span
+                      key={idx}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                        ann.category === 'rupture'
+                          ? 'bg-red-100 text-red-700'
+                          : ann.category === 'brand'
+                          ? 'bg-blue-100 text-blue-700'
+                          : ann.category === 'opportunity'
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      #{idx + 1} {ann.label}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <div className="p-3 rounded-xl bg-slate-50 text-xs text-slate-700">
                 <b>Relatório Automático:</b> {a.auto_report}

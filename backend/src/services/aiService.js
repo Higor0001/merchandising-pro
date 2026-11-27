@@ -1,15 +1,26 @@
 const fs = require('node:fs');
-const path = require('node:path');
+const sharp = require('sharp');
 const { col } = require('../db/database');
+const { normalizeAnnotations } = require('./imageAnnotator');
 
 const DEFAULT_GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
-function detectMimeType(imagePath) {
-  const ext = path.extname(imagePath || '').toLowerCase();
-  if (ext === '.png') return 'image/png';
-  if (ext === '.webp') return 'image/webp';
-  return 'image/jpeg';
+/**
+ * Normaliza orientação EXIF e gera versão otimizada (até 1280px JPEG 82%) para envio à API de Visão,
+ * garantindo que as coordenadas box_2d batam 100% com a imagem HD rotacionada no anotador
+ * e respeitando o limite gratuito de tokens/minuto.
+ */
+async function prepareImageForVision(imagePath) {
+  const buffer = await sharp(imagePath)
+    .rotate()
+    .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 82 })
+    .toBuffer();
+  return {
+    mime: 'image/jpeg',
+    base64: buffer.toString('base64'),
+  };
 }
 
 function buildVisionPrompt({ storeLabel, ownBrands, notes, openIssues }) {
@@ -19,9 +30,12 @@ function buildVisionPrompt({ storeLabel, ownBrands, notes, openIssues }) {
     ownBrands.length ? `Marcas cadastradas: ${ownBrands.slice(0, 12).join(', ')}.` : null,
     openIssues.length ? `Ocorrências abertas na loja: ${openIssues.slice(0, 5).join('; ')}.` : null,
     notes ? `Observação do promotor: "${String(notes).slice(0, 300)}".` : null,
-    'Analise SOMENTE o que é visível na fotografia da gôndola e responda exclusivamente em JSON válido (sem markdown) no formato exato:',
-    '{"detected_ruptures":["string"],"detected_brands":[{"brand":"string","facings":4,"confidence":85}],"exposure_issues":["string"],"planogram_score":80,"suggestions":["string"],"extra_point_opportunities":["string"],"auto_report":"resumo objetivo em português (máx 2 frases)","confidence":85}',
-    'Regras: seja honesto se a imagem estiver escura/borrada (reduza confidence); números entre 0 e 100 para planogram_score e confidence; arrays curtos e objetivos (máx 4 itens cada).',
+    'Analise SOMENTE o que é visível na fotografia da gôndola e demarque visualmente entre 2 e 6 áreas relevantes (rupturas/buracos, blocos de marcas, etiquetas/problemas de exposição ou espaços de oportunidade).',
+    'Use coordenadas normalizadas de 0 a 1000 em box_2d no formato [ymin, xmin, ymax, xmax] (0,0 = topo esquerdo; 1000,1000 = base direita).',
+    'Responda EXCLUSIVAMENTE em JSON válido (sem markdown) no formato exato:',
+    '{"detected_ruptures":["string"],"detected_brands":[{"brand":"string","facings":4,"confidence":85}],"exposure_issues":["string"],"planogram_score":80,"suggestions":["string"],"extra_point_opportunities":["string"],"auto_report":"resumo objetivo em português (máx 2 frases)","confidence":85,"annotations":[{"label":"Ruptura: Espaço vazio","category":"rupture","box_2d":[300,200,520,450]}]}',
+    'Valores permitidos em annotations[].category: "rupture", "brand", "exposure", "opportunity".',
+    'Regras: seja honesto se a imagem estiver escura/borrada (reduza confidence); planogram_score e confidence entre 0 e 100; arrays curtos e objetivos.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -44,6 +58,7 @@ function normalizeVisionPayload(parsed, fallbackReport) {
 
   const planogramScore = Math.min(100, Math.max(0, Number(Number(parsed?.planogram_score ?? 75).toFixed(1))));
   const confidence = Math.min(100, Math.max(0, Number(Number(parsed?.confidence ?? 75).toFixed(1))));
+  const annotations = normalizeAnnotations(parsed?.annotations);
 
   return {
     detected_ruptures: toStrArray(parsed?.detected_ruptures, ['Nenhuma ruptura evidente detectada na imagem.']),
@@ -54,6 +69,7 @@ function normalizeVisionPayload(parsed, fallbackReport) {
     extra_point_opportunities: toStrArray(parsed?.extra_point_opportunities, []),
     auto_report: String(parsed?.auto_report || fallbackReport).trim(),
     confidence: Number.isNaN(confidence) ? 75 : confidence,
+    annotations,
   };
 }
 
@@ -74,8 +90,7 @@ async function analyzeWithGroqVision({ imagePath, prompt }) {
   if (!apiKey || !imagePath || !fs.existsSync(imagePath)) return null;
 
   const model = (process.env.GROQ_VISION_MODEL || DEFAULT_GROQ_VISION_MODEL).trim();
-  const mime = detectMimeType(imagePath);
-  const base64 = (await fs.promises.readFile(imagePath)).toString('base64');
+  const { mime, base64 } = await prepareImageForVision(imagePath);
 
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -86,7 +101,7 @@ async function analyzeWithGroqVision({ imagePath, prompt }) {
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      max_tokens: 900,
+      max_tokens: 1200,
       response_format: { type: 'json_object' },
       messages: [
         {
@@ -117,8 +132,7 @@ async function analyzeWithGeminiVision({ imagePath, prompt }) {
   if (!apiKey || !imagePath || !fs.existsSync(imagePath)) return null;
 
   const model = (process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
-  const mime = detectMimeType(imagePath);
-  const base64 = (await fs.promises.readFile(imagePath)).toString('base64');
+  const { mime, base64 } = await prepareImageForVision(imagePath);
 
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
@@ -203,6 +217,7 @@ function buildHeuristicFallback({ storeLabel, products, brandMap, recentReplenis
     extra_point_opportunities: extraPointOpportunities,
     auto_report: autoReport,
     confidence: 0,
+    annotations: [],
     analysis_mode: 'heuristic_fallback',
     model_used: 'heuristic-history-v1',
   };

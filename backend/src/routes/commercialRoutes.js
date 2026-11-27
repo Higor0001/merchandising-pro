@@ -5,6 +5,7 @@ const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
+const { renderAnnotatedImage } = require('../services/imageAnnotator');
 const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
 
 const router = express.Router();
@@ -461,12 +462,42 @@ router.get('/ai/analyses', async (_req, res, next) => {
 });
 
 router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) => {
+  let annotatedPath = null;
   try {
     const { store_id, visit_id, notes } = req.body || {};
     const imagePath = req.file ? path.join(uploadDir, req.file.filename) : null;
-    const imageUrl = req.file ? await saveFileToGridFS(req.file) : '';
+    const store = store_id ? await (await col('stores')).findOne({ id: Number(store_id) }) : null;
 
-    const result = await analyzeShelfImage({ storeId: store_id, visitId: visit_id, imagePath, notes });
+    const [imageUrl, result] = await Promise.all([
+      req.file ? saveFileToGridFS(req.file) : Promise.resolve(''),
+      analyzeShelfImage({ storeId: store_id, visitId: visit_id, imagePath, notes }),
+    ]);
+
+    let annotatedImageUrl = '';
+    let finalAnnotations = result.annotations || [];
+    if (imagePath) {
+      try {
+        const rendered = await renderAnnotatedImage({
+          imagePath,
+          annotations: finalAnnotations,
+          outputDir: uploadDir,
+          planogramScore: result.planogram_score,
+          storeName: store?.name,
+        });
+        if (rendered?.annotatedPath) {
+          annotatedPath = rendered.annotatedPath;
+          finalAnnotations = rendered.annotations;
+          annotatedImageUrl = await saveFileToGridFS({
+            path: rendered.annotatedPath,
+            filename: rendered.filename,
+            mimetype: rendered.mimetype,
+          });
+        }
+      } catch (annotErr) {
+        console.error('Erro ao renderizar imagem demarcada pela IA:', annotErr.message);
+      }
+    }
+
     const id = await nextId('ai_analyses');
     const doc = {
       id,
@@ -474,6 +505,8 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       store_id: store_id ? Number(store_id) : null,
       user_id: req.user.id,
       image_url: imageUrl,
+      annotated_image_url: annotatedImageUrl,
+      annotations_json: JSON.stringify(finalAnnotations),
       detected_ruptures_json: JSON.stringify(result.detected_ruptures),
       detected_brands_json: JSON.stringify(result.detected_brands),
       exposure_issues_json: JSON.stringify(result.exposure_issues),
@@ -491,22 +524,37 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
     await (await col('ai_analyses')).insertOne(doc);
 
     if (imagePath) {
-      const store = store_id ? await (await col('stores')).findOne({ id: Number(store_id) }) : null;
+      const baseDetails = `${result.auto_report}${notes ? ` | Contexto: ${notes}` : ''}`;
+      // 1. Enviar arquivo ORIGINAL em HD ao Telegram
       await sendPhotoToTelegram({
         filePath: imagePath,
-        reason: `Análise de Gôndola com IA (${doc.analysis_mode} | Score: ${result.planogram_score}%)`,
+        reason: `Análise IA — Foto ORIGINAL (Score: ${result.planogram_score}%)`,
         storeName: store?.name,
         promoterName: req.user?.name,
-        details: `${result.auto_report}${notes ? ` | Contexto: ${notes}` : ''}`,
+        details: baseDetails,
       });
+
+      // 2. Enviar arquivo DEMARCADO PELA IA em HD ao Telegram
+      if (annotatedPath) {
+        const legend = finalAnnotations.length
+          ? finalAnnotations.map((a, i) => `#${i + 1} [${a.category}] ${a.label}`).join(' | ')
+          : 'Área geral de gôndola destacada';
+        await sendPhotoToTelegram({
+          filePath: annotatedPath,
+          reason: `Análise IA — Foto DEMARCADA (${finalAnnotations.length} área(s) | Score: ${result.planogram_score}%)`,
+          storeName: store?.name,
+          promoterName: req.user?.name,
+          details: `Marcações: ${legend}`,
+        });
+      }
     }
 
-    await logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', id, `Análise IA (${doc.analysis_mode}) confiança ${result.confidence}%`);
+    await logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', id, `Análise IA (${doc.analysis_mode}) ${finalAnnotations.length} demarcações`);
     res.status(201).json(doc);
   } catch (err) {
     next(err);
   } finally {
-    await cleanupUploadedFile(req.file);
+    await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(annotatedPath)]);
   }
 });
 
