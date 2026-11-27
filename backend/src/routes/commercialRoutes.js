@@ -1,12 +1,50 @@
 const express = require('express');
+const fs = require('node:fs');
 const path = require('node:path');
-const { col, nextId, nowStr } = require('../db/database');
+const { col, nextId, nowStr, getGridFSBucket } = require('../db/database');
 const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { enforceVisitExecutionIntegrity } = require('../middleware/visitIntegrity');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { analyzeShelfImage, generateStoreSummary } = require('../services/aiService');
-const { renderAnnotatedImage } = require('../services/imageAnnotator');
+const { normalizeAnnotations, renderAnnotatedImage } = require('../services/imageAnnotator');
 const { sendPhotoToTelegram, sendMessageToTelegram } = require('../services/telegramService');
+
+/**
+ * Baixa/recupera a imagem original em HD (Cloudinary HTTPS ou GridFS /uploads/) para um arquivo temporário local
+ * para permitir re-renderização após revisão humana 100% e envio duplo ao Telegram.
+ */
+async function materializeImageToTemp(imageUrl, prefix = 'orig') {
+  if (!imageUrl) return null;
+  const filename = `${prefix}-${Date.now()}-${Math.round(Math.random() * 1e6)}.jpg`;
+  const targetPath = path.join(uploadDir, filename);
+
+  if (/^https?:\/\//i.test(imageUrl)) {
+    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`Não foi possível baixar imagem original (HTTP ${res.status}).`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    await fs.promises.writeFile(targetPath, buf);
+    return targetPath;
+  }
+
+  if (imageUrl.startsWith('/uploads/')) {
+    const safeName = path.basename(imageUrl);
+    const localPath = path.join(uploadDir, safeName);
+    if (fs.existsSync(localPath)) {
+      await fs.promises.copyFile(localPath, targetPath);
+      return targetPath;
+    }
+    const bucket = await getGridFSBucket();
+    const files = await bucket.find({ filename: safeName }).limit(1).toArray();
+    if (!files.length) throw new Error('Imagem original não encontrada no GridFS.');
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(targetPath);
+      bucket.openDownloadStream(files[0]._id).pipe(ws).on('finish', resolve).on('error', reject);
+    });
+    return targetPath;
+  }
+
+  return null;
+}
 
 const router = express.Router();
 router.use(authenticate);
@@ -515,46 +553,134 @@ router.post('/ai/analyze-shelf', upload.single('photo'), async (req, res, next) 
       extra_point_opportunities_json: JSON.stringify(result.extra_point_opportunities),
       auto_report: result.auto_report,
       confidence: result.confidence,
+      self_verified: Boolean(result.self_verified),
+      verification_notes: result.verification_notes || '',
       analysis_mode: result.analysis_mode || 'heuristic_fallback',
       model_used: result.model_used || '',
       human_validation: 'Pendente',
       human_notes: '',
+      telegram_sent: false,
+      telegram_sent_at: null,
       created_at: nowStr(),
     };
     await (await col('ai_analyses')).insertOne(doc);
 
-    if (imagePath) {
-      const baseDetails = `${result.auto_report}${notes ? ` | Contexto: ${notes}` : ''}`;
-      // 1. Enviar arquivo ORIGINAL em HD ao Telegram
-      await sendPhotoToTelegram({
-        filePath: imagePath,
-        reason: `Análise IA — Foto ORIGINAL (Score: ${result.planogram_score}%)`,
-        storeName: store?.name,
-        promoterName: req.user?.name,
-        details: baseDetails,
-      });
-
-      // 2. Enviar arquivo DEMARCADO PELA IA em HD ao Telegram
-      if (annotatedPath) {
-        const legend = finalAnnotations.length
-          ? finalAnnotations.map((a, i) => `#${i + 1} [${a.category}] ${a.label}`).join(' | ')
-          : 'Área geral de gôndola destacada';
-        await sendPhotoToTelegram({
-          filePath: annotatedPath,
-          reason: `Análise IA — Foto DEMARCADA (${finalAnnotations.length} área(s) | Score: ${result.planogram_score}%)`,
-          storeName: store?.name,
-          promoterName: req.user?.name,
-          details: `Marcações: ${legend}`,
-        });
-      }
-    }
-
-    await logAudit(req.user, 'AI_ANALYZE', 'ai_analyses', id, `Análise IA (${doc.analysis_mode}) ${finalAnnotations.length} demarcações`);
+    await logAudit(
+      req.user,
+      'AI_ANALYZE',
+      'ai_analyses',
+      id,
+      `Análise IA (${doc.analysis_mode}, 2-pass=${doc.self_verified}) ${finalAnnotations.length} demarcações — aguardando confirmação visual`
+    );
     res.status(201).json(doc);
   } catch (err) {
     next(err);
   } finally {
     await Promise.all([cleanupUploadedFile(req.file), cleanupUploadedFile(annotatedPath)]);
+  }
+});
+
+// Confirmar 100% as marcações (após revisão/edição visual no frontend), re-renderizar HD e enviar Original + Demarcada ao Telegram
+router.post('/ai/analyses/:id/confirm-and-send', async (req, res, next) => {
+  let tempOrigPath = null;
+  let tempAnnotPath = null;
+  try {
+    const aid = Number(req.params.id);
+    const aiCol = await col('ai_analyses');
+    const existing = await aiCol.findOne({ id: aid });
+    if (!existing) return res.status(404).json({ error: 'Análise não encontrada.' });
+
+    const { annotations, human_notes = '', send_to_telegram = true } = req.body || {};
+    const parsedExisting = (() => {
+      try {
+        return JSON.parse(existing.annotations_json || '[]');
+      } catch {
+        return [];
+      }
+    })();
+    const finalAnnotations = Array.isArray(annotations) ? normalizeAnnotations(annotations) : parsedExisting;
+    const store = existing.store_id ? await (await col('stores')).findOne({ id: Number(existing.store_id) }) : null;
+
+    let annotatedImageUrl = existing.annotated_image_url || '';
+    if (existing.image_url) {
+      tempOrigPath = await materializeImageToTemp(existing.image_url, `ai-orig-${aid}`);
+      if (tempOrigPath) {
+        const rendered = await renderAnnotatedImage({
+          imagePath: tempOrigPath,
+          annotations: finalAnnotations,
+          outputDir: uploadDir,
+          planogramScore: existing.planogram_score,
+          storeName: store?.name,
+        });
+        if (rendered?.annotatedPath) {
+          tempAnnotPath = rendered.annotatedPath;
+          annotatedImageUrl = await saveFileToGridFS({
+            path: rendered.annotatedPath,
+            filename: rendered.filename,
+            mimetype: rendered.mimetype,
+          });
+        }
+      }
+    }
+
+    let telegramSent = Boolean(existing.telegram_sent);
+    let telegramSentAt = existing.telegram_sent_at || null;
+    let telegramResults = null;
+
+    if (send_to_telegram && tempOrigPath) {
+      const r1 = await sendPhotoToTelegram({
+        filePath: tempOrigPath,
+        reason: `Análise IA Validada 100% — Foto ORIGINAL (Score: ${existing.planogram_score}%)`,
+        storeName: store?.name,
+        promoterName: req.user?.name,
+        details: `${existing.auto_report}${human_notes ? ` | Nota: ${human_notes}` : ''}`,
+      });
+      let r2 = { sent: false };
+      if (tempAnnotPath) {
+        const legend = finalAnnotations.length
+          ? finalAnnotations.map((a, i) => `#${i + 1} [${a.category}] ${a.label}`).join(' | ')
+          : 'Área geral de gôndola destacada';
+        r2 = await sendPhotoToTelegram({
+          filePath: tempAnnotPath,
+          reason: `Análise IA Validada 100% — Foto DEMARCADA (${finalAnnotations.length} área(s))`,
+          storeName: store?.name,
+          promoterName: req.user?.name,
+          details: `Marcações validadas: ${legend}`,
+        });
+      }
+      telegramResults = { original: r1, annotated: r2 };
+      if (r1.sent || r2.sent) {
+        telegramSent = true;
+        telegramSentAt = nowStr();
+      }
+    }
+
+    const updatedFields = {
+      annotations_json: JSON.stringify(finalAnnotations),
+      annotated_image_url: annotatedImageUrl,
+      human_validation: 'Confirmado',
+      human_notes: String(human_notes || '').trim(),
+      verified_by: req.user.id,
+      verified_at: nowStr(),
+      telegram_sent: telegramSent,
+      telegram_sent_at: telegramSentAt,
+    };
+
+    await aiCol.updateOne({ id: aid }, { $set: updatedFields });
+    await logAudit(
+      req.user,
+      'AI_CONFIRM_SEND',
+      'ai_analyses',
+      aid,
+      `Marcações validadas (${finalAnnotations.length} áreas) | Telegram=${telegramSent}`
+    );
+
+    const updated = await aiCol.findOne({ id: aid }, { projection: { _id: 0 } });
+    res.json({ analysis: updated, telegram: telegramResults });
+  } catch (err) {
+    next(err);
+  } finally {
+    await Promise.all([cleanupUploadedFile(tempOrigPath), cleanupUploadedFile(tempAnnotPath)]);
   }
 });
 
