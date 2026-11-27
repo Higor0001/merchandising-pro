@@ -19,6 +19,7 @@ async function runIncrementalMigrations() {
             'migration_indexes_v1',
             'migration_pepsico_si5_clean_v1',
             'migration_pepsico_catalog_v2',
+            'migration_dedup_pepsico_v3',
           ],
         },
       })
@@ -275,6 +276,95 @@ async function runIncrementalMigrations() {
       await countersCol.updateOne(
         { _id: 'migration_pepsico_catalog_v2' },
         { $set: { seq: bulkOps.length, migrated_at: migratedAt } },
+        { upsert: true }
+      );
+    }
+
+    // 5. Remoção de produtos repetidos / kits / DUN-14 duplicados no MongoDB em lote (< 0.5s), preservando IDs dos itens canônicos
+    const alreadyDedupedV3 = doneSet.has('migration_dedup_pepsico_v3');
+    if (!alreadyDedupedV3 && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+      const productsCol = await col('products');
+      const migratedAt = nowStr();
+      const canonicalByEan = new Map(pepsicoCatalog.map((item) => [String(item.ean || '').trim(), item]));
+
+      const allActive = await productsCol
+        .find(
+          { active: { $ne: 0 } },
+          { projection: { _id: 0, id: 1, ean: 1, name: 1, brand_id: 1, weight: 1, source: 1 } }
+        )
+        .toArray();
+
+      const seenEans = new Set();
+      const seenNameKey = new Set();
+      const bulkOps = [];
+      let deactivatedCount = 0;
+
+      // Ordenar para priorizar registros que batem com o catálogo canônico e IDs menores (mais antigos/referenciados)
+      allActive.sort((a, b) => {
+        const aCanon = canonicalByEan.has(String(a.ean || '').trim()) ? 1 : 0;
+        const bCanon = canonicalByEan.has(String(b.ean || '').trim()) ? 1 : 0;
+        if (bCanon !== aCanon) return bCanon - aCanon;
+        return Number(a.id || 0) - Number(b.id || 0);
+      });
+
+      const normSimple = (s) =>
+        String(s || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .trim();
+
+      for (const prod of allActive) {
+        const ean = String(prod.ean || '').trim();
+        const canonical = canonicalByEan.get(ean);
+        const isCatalogSource = !prod.source || ['si5', 'pepsico_catalog_v2', 'pepsico_2026', 'openfoodfacts'].includes(prod.source);
+        const nameKey = `${prod.brand_id || 0}||${normSimple(prod.name)}||${normSimple(prod.weight)}`;
+
+        // Desativar se: EAN duplicado no banco, OU item de catálogo removido na deduplicação, OU nome+marca+gramatura idênticos
+        if ((ean && seenEans.has(ean)) || (isCatalogSource && !canonical) || seenNameKey.has(nameKey)) {
+          bulkOps.push({
+            updateOne: {
+              filter: { id: prod.id },
+              update: {
+                $set: {
+                  active: 0,
+                  deactivated_reason: 'Produto duplicado removido (limpeza v3)',
+                  updated_at: migratedAt,
+                },
+              },
+            },
+          });
+          deactivatedCount++;
+          continue;
+        }
+
+        if (ean) seenEans.add(ean);
+        seenNameKey.add(nameKey);
+
+        if (canonical && (canonical.weight !== prod.weight || canonical.name !== prod.name)) {
+          bulkOps.push({
+            updateOne: {
+              filter: { id: prod.id },
+              update: {
+                $set: {
+                  name: canonical.name,
+                  weight: canonical.weight || prod.weight || '',
+                  updated_at: migratedAt,
+                },
+              },
+            },
+          });
+        }
+      }
+
+      if (bulkOps.length > 0) {
+        await productsCol.bulkWrite(bulkOps, { ordered: false });
+      }
+
+      await countersCol.updateOne(
+        { _id: 'migration_dedup_pepsico_v3' },
+        { $set: { seq: deactivatedCount, migrated_at: migratedAt } },
         { upsert: true }
       );
     }

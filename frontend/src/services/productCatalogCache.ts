@@ -5,8 +5,8 @@ import {
   setCatalogRecord,
 } from './offlineDb';
 
-const CATALOG_STORE_KEY = 'si5_catalog_v5';
-const SEARCH_CACHE_STORE_KEY = 'si5_search_cache_v5';
+const CATALOG_STORE_KEY = 'si5_catalog_v6';
+const SEARCH_CACHE_STORE_KEY = 'si5_search_cache_v6';
 const LEGACY_CATALOG_KEY = 'merchpro_si5_catalog_v3';
 
 export interface CachedProduct {

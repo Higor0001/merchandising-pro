@@ -79,8 +79,8 @@ router.post('/products', authorize('admin', 'supervisor'), async (req, res, next
       return res.status(400).json({ error: 'SKU, EAN, nome e categoria são obrigatórios.' });
     }
     const productsCol = await col('products');
-    if (await productsCol.findOne({ sku })) {
-      return res.status(400).json({ error: 'SKU já cadastrado.' });
+    if (await productsCol.findOne({ $or: [{ sku }, { ean, active: { $ne: 0 } }] })) {
+      return res.status(400).json({ error: 'Já existe um produto ativo cadastrado com este SKU ou EAN.' });
     }
     const id = await nextId('products');
     const doc = {
