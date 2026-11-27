@@ -189,12 +189,14 @@ export async function exportVisitHistoryPDF(report: VisitReportPayload): Promise
   y += 3;
 
   const evs = summary.evidences || {};
+  const initialCount = evs.initial?.length || 0;
+  const finalCount = evs.final?.length || 0;
   const totalPhotos = Math.max(
     report.photos?.length || 0,
     (evs.selfie_entrada?.length || 0) +
-      (evs.initial?.length || 0) +
+      initialCount +
       (evs.complementary?.length || 0) +
-      (evs.final?.length || 0)
+      finalCount
   );
 
   autoTable(doc, {
@@ -205,7 +207,7 @@ export async function exportVisitHistoryPDF(report: VisitReportPayload): Promise
       ['Itens Abastecidos', `${summary.replenished_items_count ?? (summary.replenishments?.length || 0)} (${summary.total_replenished_qty || 0} un)`, 'Validades Conferidas', String(summary.expiries_count ?? (summary.expiries?.length || 0))],
       ['Precificações', String(summary.price_checks_count ?? (summary.price_checks?.length || 0)), 'Exposições / Displays', String(summary.displays_count ?? (summary.displays?.length || 0))],
       ['Ocorrências / Rupturas', `${summary.occurrences_count ?? (summary.occurrences?.length || 0)} (${summary.ruptures_count || 0} rupturas)`, 'Checklist Concluído', `${summary.checklist_done || 0} / ${summary.checklist_total || checklist.length}`],
-      ['Evidências Fotográficas', `${totalPhotos} foto(s) em HD`, 'Retirados (Vencidos)', `${summary.removed_products_qty || 0} un`],
+      ['Fotos (Iniciais / Finais)', `${initialCount} inicial(is) • ${finalCount} final(is) (${totalPhotos} total)`, 'Retirados (Vencidos)', `${summary.removed_products_qty || 0} un`],
     ],
     styles: { fontSize: 8.5, cellPadding: 2.2 },
     headStyles: { fillColor: [29, 78, 216] },
@@ -378,124 +380,155 @@ export async function exportVisitHistoryPDF(report: VisitReportPayload): Promise
     y = ((doc as any).lastAutoTable?.finalY || y + 25) + 7;
   }
 
-  // 10. Evidências Fotográficas embutidas em alta nitidez (usa base64 direto do servidor + fallback client)
+  // 10. Evidências Fotográficas organizadas por etapa (Selfie, Iniciais/Antes, Finais/Depois e Complementares/Extras)
   const fallbackEvidences = [
-    ...(evs.selfie_entrada || []).map((p: any) => ({ ...p, stage_label: 'Selfie na Entrada' })),
-    ...(evs.initial || []).map((p: any) => ({ ...p, stage_label: 'Foto Inicial (Antes)' })),
-    ...(evs.complementary || []).map((p: any) => ({ ...p, stage_label: 'Foto Complementar' })),
-    ...(evs.final || []).map((p: any) => ({ ...p, stage_label: 'Foto Final (Depois)' })),
+    ...(evs.selfie_entrada || []).map((p: any) => ({ ...p, stage: 'SELFIE_ENTRADA', stage_label: 'Selfie na Entrada' })),
+    ...(evs.initial || []).map((p: any) => ({ ...p, stage: 'INICIAL', stage_label: 'Foto Inicial (Antes)' })),
+    ...(evs.final || []).map((p: any) => ({ ...p, stage: 'FINAL', stage_label: 'Foto Final (Depois)' })),
+    ...(evs.complementary || []).map((p: any) => ({ ...p, stage: 'COMPLEMENTAR', stage_label: 'Foto Complementar' })),
   ];
   const allEvidences = Array.isArray(report.photos) && report.photos.length > 0 ? report.photos : fallbackEvidences;
 
   if (allEvidences.length > 0) {
-    ensureSpace(75);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(`Evidências Fotográficas da Visita (${allEvidences.length})`, margin, y);
-    y += 5;
-
     const fullW = pageW - margin * 2;
     const colW = (fullW - 6) / 2;
     const stdBoxH = 60;
     const panoBoxH = 54;
-    let colIdx = 0;
 
-    for (const ev of allEvidences) {
-      let dataUrl = ev.data_url || '';
-      let aspect = ev.width && ev.height ? ev.width / ev.height : 4 / 3;
+    const normSt = (ev: any) => String(ev?.stage || '').toUpperCase().trim();
+    const rawPhotoGroups: Array<{ title: string; color: [number, number, number]; items: any[] }> = [
+      {
+        title: 'Selfie na Entrada',
+        color: [79, 70, 229],
+        items: allEvidences.filter((e) => normSt(e) === 'SELFIE_ENTRADA'),
+      },
+      {
+        title: 'Fotos Iniciais — Antes da Intervenção',
+        color: [29, 78, 216],
+        items: allEvidences.filter((e) => normSt(e) === 'INICIAL' || normSt(e) === 'EXPOSICAO_ANTES'),
+      },
+      {
+        title: 'Fotos Finais — Depois da Intervenção',
+        color: [5, 150, 105],
+        items: allEvidences.filter((e) => normSt(e) === 'FINAL' || normSt(e) === 'EXPOSICAO_DEPOIS'),
+      },
+      {
+        title: 'Fotos Complementares & Outros Registros',
+        color: [51, 65, 85],
+        items: allEvidences.filter(
+          (e) => !['SELFIE_ENTRADA', 'INICIAL', 'FINAL', 'EXPOSICAO_ANTES', 'EXPOSICAO_DEPOIS'].includes(normSt(e))
+        ),
+      },
+    ];
+    const photoGroups = rawPhotoGroups.filter((g) => g.items.length > 0);
 
-      if (!dataUrl && ev.photo_url) {
-        const loaded = await fetchImageAsJpegDataUrl(ev.photo_url);
-        if (loaded) {
-          dataUrl = loaded.dataUrl;
-          aspect = loaded.aspect;
+    for (const group of photoGroups) {
+      ensureSpace(78);
+      doc.setFillColor(group.color[0], group.color[1], group.color[2]);
+      doc.roundedRect(margin, y, fullW, 8, 2, 2, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${group.title} (${group.items.length})`, margin + 3.5, y + 5.5);
+      y += 11;
+
+      let colIdx = 0;
+
+      for (const ev of group.items) {
+        let dataUrl = ev.data_url || '';
+        let aspect = ev.width && ev.height ? ev.width / ev.height : 4 / 3;
+
+        if (!dataUrl && ev.photo_url) {
+          const loaded = await fetchImageAsJpegDataUrl(ev.photo_url);
+          if (loaded) {
+            dataUrl = loaded.dataUrl;
+            aspect = loaded.aspect;
+          }
         }
-      }
 
-      const isPano = Boolean(ev.is_panoramic) || aspect >= 2.0;
+        const isPano = Boolean(ev.is_panoramic) || aspect >= 2.0;
 
-      if (isPano) {
-        // Se havia 1 foto pendente na coluna esquerda, fecha a linha antes da panorâmica full-width
-        if (colIdx === 1) {
-          colIdx = 0;
-          y += stdBoxH + 16;
+        if (isPano) {
+          if (colIdx === 1) {
+            colIdx = 0;
+            y += stdBoxH + 16;
+          }
+          ensureSpace(panoBoxH + 16);
+          doc.setDrawColor(203, 213, 225);
+          doc.roundedRect(margin, y, fullW, panoBoxH + 12, 2.5, 2.5, 'S');
+
+          if (dataUrl) {
+            const maxImgW = fullW - 4;
+            const maxImgH = panoBoxH - 2;
+            let drawW = maxImgW;
+            let drawH = drawW / aspect;
+            if (drawH > maxImgH) {
+              drawH = maxImgH;
+              drawW = drawH * aspect;
+            }
+            const offsetX = margin + 2 + (maxImgW - drawW) / 2;
+            const offsetY = y + 2 + (maxImgH - drawH) / 2;
+            doc.addImage(dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
+          } else {
+            doc.setFontSize(8);
+            doc.setTextColor(100, 116, 139);
+            doc.text('Imagem indisponível offline', margin + 5, y + 26);
+          }
+
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(15, 23, 42);
+          const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'} (Panorâmica)`.slice(0, 95);
+          doc.text(label, margin + 3, y + panoBoxH + 5);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(100, 116, 139);
+          doc.text(String(ev.captured_at || ''), margin + 3, y + panoBoxH + 9.5);
+          y += panoBoxH + 16;
+          continue;
         }
-        ensureSpace(panoBoxH + 16);
+
+        if (colIdx === 0) ensureSpace(stdBoxH + 16);
+        const x = margin + colIdx * (colW + 6);
+
         doc.setDrawColor(203, 213, 225);
-        doc.roundedRect(margin, y, fullW, panoBoxH + 12, 2.5, 2.5, 'S');
+        doc.roundedRect(x, y, colW, stdBoxH + 12, 2.5, 2.5, 'S');
 
         if (dataUrl) {
-          const maxImgW = fullW - 4;
-          const maxImgH = panoBoxH - 2;
+          const maxImgW = colW - 4;
+          const maxImgH = stdBoxH - 2;
           let drawW = maxImgW;
           let drawH = drawW / aspect;
           if (drawH > maxImgH) {
             drawH = maxImgH;
             drawW = drawH * aspect;
           }
-          const offsetX = margin + 2 + (maxImgW - drawW) / 2;
+          const offsetX = x + 2 + (maxImgW - drawW) / 2;
           const offsetY = y + 2 + (maxImgH - drawH) / 2;
           doc.addImage(dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
         } else {
-          doc.setFontSize(8);
+          doc.setFontSize(7.5);
           doc.setTextColor(100, 116, 139);
-          doc.text('Imagem indisponível offline', margin + 5, y + 26);
+          doc.text('Imagem registrada no servidor', x + 4, y + 28);
         }
 
         doc.setFontSize(8);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(15, 23, 42);
-        const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'} (Panorâmica)`.slice(0, 95);
-        doc.text(label, margin + 3, y + panoBoxH + 5);
+        const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'}`.slice(0, 50);
+        doc.text(label, x + 3, y + stdBoxH + 5);
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(100, 116, 139);
-        doc.text(String(ev.captured_at || ''), margin + 3, y + panoBoxH + 9.5);
-        y += panoBoxH + 16;
-        continue;
-      }
+        doc.text(String(ev.captured_at || ''), x + 3, y + stdBoxH + 9.5);
 
-      if (colIdx === 0) ensureSpace(stdBoxH + 16);
-      const x = margin + colIdx * (colW + 6);
-
-      doc.setDrawColor(203, 213, 225);
-      doc.roundedRect(x, y, colW, stdBoxH + 12, 2.5, 2.5, 'S');
-
-      if (dataUrl) {
-        const maxImgW = colW - 4;
-        const maxImgH = stdBoxH - 2;
-        let drawW = maxImgW;
-        let drawH = drawW / aspect;
-        if (drawH > maxImgH) {
-          drawH = maxImgH;
-          drawW = drawH * aspect;
+        colIdx++;
+        if (colIdx === 2) {
+          colIdx = 0;
+          y += stdBoxH + 16;
         }
-        const offsetX = x + 2 + (maxImgW - drawW) / 2;
-        const offsetY = y + 2 + (maxImgH - drawH) / 2;
-        doc.addImage(dataUrl, 'JPEG', offsetX, offsetY, drawW, drawH);
-      } else {
-        doc.setFontSize(7.5);
-        doc.setTextColor(100, 116, 139);
-        doc.text('Imagem registrada no servidor', x + 4, y + 28);
       }
-
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(15, 23, 42);
-      const label = `${ev.stage_label || ev.stage || 'Foto'} • ${ev.area || 'PDV'}`.slice(0, 50);
-      doc.text(label, x + 3, y + stdBoxH + 5);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 116, 139);
-      doc.text(String(ev.captured_at || ''), x + 3, y + stdBoxH + 9.5);
-
-      colIdx++;
-      if (colIdx === 2) {
-        colIdx = 0;
+      if (colIdx === 1) {
         y += stdBoxH + 16;
       }
-    }
-    if (colIdx === 1) {
-      y += stdBoxH + 16;
     }
   }
 

@@ -47,7 +47,7 @@ async function buildOperationalSummary(visitId, storeId) {
     (await col('displays_exposures')).find({ visit_id: vid, store_id: sid }, { projection: { _id: 0 } }).toArray(),
     (await col('planogram_audits')).find({ visit_id: vid, store_id: sid }, { projection: { _id: 0 } }).toArray(),
     (await col('visit_checklists')).find({ visit_id: vid }, { projection: { _id: 0 } }).toArray(),
-    (await col('visit_evidences')).find({ visit_id: vid, store_id: sid, is_active: { $ne: 0 } }, { projection: { _id: 0 } }).toArray(),
+    (await col('visit_evidences')).find({ visit_id: vid, is_active: { $ne: 0 } }, { projection: { _id: 0 } }).sort({ id: 1 }).toArray(),
     (await col('visit_diagnostics')).findOne({ visit_id: vid, store_id: sid }, { projection: { _id: 0 } }),
     (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1, sku: 1, ean: 1, weight: 1 } }).toArray(),
   ]);
@@ -62,10 +62,11 @@ async function buildOperationalSummary(visitId, storeId) {
   const unresolvedPendencies = occurrences.filter((o) => o.status !== 'Resolvida');
   const checklistDone = checklists.filter((c) => c.completed).length;
 
-  const selfieEntradaPhotos = evidences.filter((e) => e.stage === 'SELFIE_ENTRADA');
-  const initialPhotos = evidences.filter((e) => e.stage === 'INICIAL');
-  const complementaryPhotos = evidences.filter((e) => e.stage === 'COMPLEMENTAR');
-  const finalPhotos = evidences.filter((e) => e.stage === 'FINAL');
+  const normStage = (e) => String(e?.stage || '').toUpperCase().trim();
+  const selfieEntradaPhotos = evidences.filter((e) => normStage(e) === 'SELFIE_ENTRADA');
+  const initialPhotos = evidences.filter((e) => normStage(e) === 'INICIAL');
+  const complementaryPhotos = evidences.filter((e) => normStage(e) === 'COMPLEMENTAR');
+  const finalPhotos = evidences.filter((e) => normStage(e) === 'FINAL');
 
   // Agrupar comparação visual Antes x Depois por área
   const areas = new Set([...initialPhotos.map((p) => p.area || 'Geral'), ...finalPhotos.map((p) => p.area || 'Geral')]);
@@ -593,16 +594,27 @@ router.get('/visits/:id/report', async (req, res, next) => {
     });
 
     // Embutir imagens em base64 direto no servidor (zero CORS, garantido no PDF no celular e desktop)
+    // Prioriza Selfie, Fotos Finais e Fotos Iniciais, ajustando compressão para caber 100% das fotos no PDF
     if (includeImages && gallery.length > 0) {
-      const compactMode = gallery.length > 18;
-      const maxW = compactMode ? 560 : 760;
-      const qual = compactMode ? 68 : 78;
-      const MAX_TOTAL_BYTES = 3_200_000;
+      const count = gallery.length;
+      const maxW = count <= 12 ? 760 : count <= 24 ? 580 : count <= 40 ? 460 : 380;
+      const qual = count <= 12 ? 78 : count <= 24 ? 70 : count <= 40 ? 62 : 55;
+      const MAX_TOTAL_BYTES = 3_400_000;
       let usedBytes = 0;
 
+      const stagePriority = (s) => {
+        const u = String(s || '').toUpperCase();
+        if (u === 'FINAL') return 0;
+        if (u === 'INICIAL') return 1;
+        if (u === 'SELFIE_ENTRADA') return 2;
+        if (u === 'EXPOSICAO_DEPOIS' || u === 'EXPOSICAO_ANTES') return 3;
+        return 4;
+      };
+      const embedOrder = [...gallery].sort((a, b) => stagePriority(a.stage) - stagePriority(b.stage));
+
       // Processar em lotes de 5 em paralelo para rapidez
-      for (let i = 0; i < gallery.length; i += 5) {
-        const batch = gallery.slice(i, i + 5);
+      for (let i = 0; i < embedOrder.length; i += 5) {
+        const batch = embedOrder.slice(i, i + 5);
         const embedded = await Promise.all(
           batch.map((item) => embedPhotoAsDataUrl(item.photo_url, maxW, qual))
         );
