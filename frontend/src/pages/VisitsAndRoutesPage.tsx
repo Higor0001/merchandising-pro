@@ -1,5 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Clock, MapPin, Play, Square, Plus, ListChecks, XCircle, Trash2, FileText, FileSpreadsheet } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  CheckCircle2,
+  Clock,
+  MapPin,
+  Play,
+  Square,
+  Plus,
+  ListChecks,
+  XCircle,
+  Trash2,
+  FileText,
+  FileSpreadsheet,
+  Calendar,
+  CalendarRange,
+  Search,
+  Filter,
+} from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -7,10 +23,40 @@ import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
 
-export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpenStore?: (storeId: number) => void }> = ({ mode, onOpenStore }) => {
+type DateFilterMode = 'hoje' | 'ontem' | '7dias' | 'mes' | 'data' | 'periodo' | 'todas';
+
+function getBrazilDateStr(offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 86400000);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+function formatBrDate(isoDay: string): string {
+  if (!isoDay || !/^\d{4}-\d{2}-\d{2}$/.test(isoDay)) return isoDay;
+  const [y, m, d] = isoDay.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+export const VisitsAndRoutesPage: React.FC<{
+  mode: 'visitas' | 'roteiros';
+  onOpenStore?: (storeId: number) => void;
+}> = ({ mode, onOpenStore }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const isManager = user?.role === 'admin' || user?.role === 'supervisor';
+
+  const todayStr = useMemo(() => getBrazilDateStr(0), []);
+  const [dateMode, setDateMode] = useState<DateFilterMode>('hoje');
+  const [singleDate, setSingleDate] = useState<string>(todayStr);
+  const [startDate, setStartDate] = useState<string>(getBrazilDateStr(-7));
+  const [endDate, setEndDate] = useState<string>(todayStr);
+  const [statusFilter, setStatusFilter] = useState<string>('Todas');
+  const [searchStore, setSearchStore] = useState<string>('');
+
   const [cancelVisitId, setCancelVisitId] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [visits, setVisits] = useState<any[]>([]);
@@ -25,28 +71,8 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
   const [visitPhotoArea, setVisitPhotoArea] = useState('Corredor Principal');
   const [uploadingVisitPhotos, setUploadingVisitPhotos] = useState(false);
   const [downloadingVisitId, setDownloadingVisitId] = useState<number | null>(null);
+  const [loadingVisits, setLoadingVisits] = useState(true);
   const [activeActionTab, setActiveActionTab] = useState<'foto' | 'exposicao' | 'preco' | 'campanha' | 'ocorrencia'>('foto');
-
-  const handleDownloadVisit = async (visitId: number, format: 'pdf' | 'excel') => {
-    setDownloadingVisitId(visitId);
-    try {
-      const [report, exporter] = await Promise.all([
-        apiFetch<any>(`/visits/${visitId}/report${format === 'pdf' ? '?include_images=1' : ''}`),
-        import('../services/exportUtils'),
-      ]);
-      if (format === 'pdf') {
-        await exporter.exportVisitHistoryPDF(report);
-        toast('ok', `Histórico da Visita #${visitId} baixado em PDF!`);
-      } else {
-        exporter.exportVisitHistoryExcel(report);
-        toast('ok', `Histórico da Visita #${visitId} baixado em Excel!`);
-      }
-    } catch (err: any) {
-      toast('err', err.message || 'Erro ao baixar histórico da visita.');
-    } finally {
-      setDownloadingVisitId(null);
-    }
-  };
 
   // Quick action states inside selected visit
   const [expBefore, setExpBefore] = useState<File | null>(null);
@@ -66,38 +92,128 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
 
   // New Visit form
   const [showNewVisit, setShowNewVisit] = useState(false);
-  const [newVisit, setNewVisit] = useState({ store_id: '', scheduled_date: new Date().toISOString().slice(0, 10), scheduled_time: '08:00', notes: '' });
+  const [newVisit, setNewVisit] = useState({ store_id: '', scheduled_date: todayStr, scheduled_time: '08:00', notes: '' });
 
   // New Route form
   const [showNewRoute, setShowNewRoute] = useState(false);
-  const [newRoute, setNewRoute] = useState({ name: '', region: 'Zona Sul', day_of_week: 'Segunda-feira', store_ids: [] as number[], notes: '' });
+  const [newRoute, setNewRoute] = useState({ name: '', region: 'Centro', day_of_week: 'Segunda-feira', store_ids: [] as number[], notes: '' });
 
-  const loadAll = async () => {
-    const [v, r, s, p, b, c] = await Promise.all([
-      apiFetch('/visits'),
-      apiFetch('/routes'),
-      apiFetch('/stores'),
-      loadProductsWithDeviceCache(false),
-      apiFetch('/brands'),
-      apiFetch('/campaigns'),
-    ]);
-    setVisits(v);
-    setRoutes(r);
-    setStores(s);
-    setProducts(p);
-    setBrands(b);
-    setCampaigns(c.campaigns || []);
-    if (s.length > 0 && !newVisit.store_id) setNewVisit((prev) => ({ ...prev, store_id: String(s[0].id) }));
-    if (p.length > 0 && !priceForm.product_id) setPriceForm((prev) => ({ ...prev, product_id: String(p[0].id) }));
-    if (b.length > 0 && !expForm.brand_id) setExpForm((prev) => ({ ...prev, brand_id: String(b[0].id) }));
-    if ((c.campaigns || []).length > 0 && !campForm.campaign_id) {
-      setCampForm((prev) => ({ ...prev, campaign_id: String(c.campaigns[0].id) }));
+  const buildVisitsEndpoint = useCallback(() => {
+    if (mode === 'roteiros') return '/visits';
+    const params = new URLSearchParams();
+    if (dateMode === 'hoje') {
+      params.set('date', getBrazilDateStr(0));
+    } else if (dateMode === 'ontem') {
+      params.set('date', getBrazilDateStr(-1));
+    } else if (dateMode === '7dias') {
+      params.set('start_date', getBrazilDateStr(-6));
+      params.set('end_date', getBrazilDateStr(0));
+    } else if (dateMode === 'mes') {
+      const today = getBrazilDateStr(0);
+      params.set('start_date', `${today.slice(0, 7)}-01`);
+      params.set('end_date', today);
+    } else if (dateMode === 'data' && singleDate) {
+      params.set('date', singleDate);
+    } else if (dateMode === 'periodo') {
+      if (startDate) params.set('start_date', startDate);
+      if (endDate) params.set('end_date', endDate);
     }
-  };
+    const qs = params.toString();
+    return qs ? `/visits?${qs}` : '/visits';
+  }, [mode, dateMode, singleDate, startDate, endDate]);
+
+  const loadVisitsOnly = useCallback(async () => {
+    setLoadingVisits(true);
+    try {
+      const v = await apiFetch<any[]>(buildVisitsEndpoint());
+      setVisits(Array.isArray(v) ? v : []);
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar visitas.');
+    } finally {
+      setLoadingVisits(false);
+    }
+  }, [buildVisitsEndpoint, toast]);
+
+  const loadStaticData = useCallback(async () => {
+    try {
+      const [r, s, p, b, c] = await Promise.all([
+        apiFetch('/routes'),
+        apiFetch('/stores'),
+        loadProductsWithDeviceCache(false),
+        apiFetch('/brands'),
+        apiFetch('/campaigns'),
+      ]);
+      setRoutes(Array.isArray(r) ? r : []);
+      setStores(Array.isArray(s) ? s : []);
+      setProducts(Array.isArray(p) ? p : []);
+      setBrands(Array.isArray(b) ? b : []);
+      setCampaigns(c?.campaigns || []);
+      if (Array.isArray(s) && s.length > 0) setNewVisit((prev) => ({ ...prev, store_id: prev.store_id || String(s[0].id) }));
+      if (Array.isArray(p) && p.length > 0) setPriceForm((prev) => ({ ...prev, product_id: prev.product_id || String(p[0].id) }));
+      if (Array.isArray(b) && b.length > 0) setExpForm((prev) => ({ ...prev, brand_id: prev.brand_id || String(b[0].id) }));
+      if ((c?.campaigns || []).length > 0) {
+        setCampForm((prev) => ({ ...prev, campaign_id: prev.campaign_id || String(c.campaigns[0].id) }));
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar dados auxiliares.');
+    }
+  }, [toast]);
 
   useEffect(() => {
-    loadAll();
-  }, []);
+    void loadStaticData();
+  }, [loadStaticData]);
+
+  useEffect(() => {
+    void loadVisitsOnly();
+  }, [loadVisitsOnly]);
+
+  const loadAll = async () => {
+    await Promise.all([loadVisitsOnly(), loadStaticData()]);
+  };
+
+  const filteredVisits = useMemo(() => {
+    const q = searchStore.trim().toLowerCase();
+    return visits.filter((v) => {
+      if (statusFilter !== 'Todas' && v.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        String(v.store_name || '').toLowerCase().includes(q) ||
+        String(v.store_address || '').toLowerCase().includes(q) ||
+        String(v.promoter_name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [visits, statusFilter, searchStore]);
+
+  const periodDescription = useMemo(() => {
+    if (dateMode === 'hoje') return `Hoje (${formatBrDate(getBrazilDateStr(0))})`;
+    if (dateMode === 'ontem') return `Ontem (${formatBrDate(getBrazilDateStr(-1))})`;
+    if (dateMode === '7dias') return `Últimos 7 dias (${formatBrDate(getBrazilDateStr(-6))} a ${formatBrDate(getBrazilDateStr(0))})`;
+    if (dateMode === 'mes') return `Este mês (desde 01/${getBrazilDateStr(0).slice(5, 7)}/${getBrazilDateStr(0).slice(0, 4)})`;
+    if (dateMode === 'data') return `Data: ${formatBrDate(singleDate)}`;
+    if (dateMode === 'periodo') return `Período: ${formatBrDate(startDate)} a ${formatBrDate(endDate)}`;
+    return 'Todo o histórico disponível';
+  }, [dateMode, singleDate, startDate, endDate]);
+
+  const handleDownloadVisit = async (visitId: number, format: 'pdf' | 'excel') => {
+    setDownloadingVisitId(visitId);
+    try {
+      const [report, exporter] = await Promise.all([
+        apiFetch<any>(`/visits/${visitId}/report${format === 'pdf' ? '?include_images=1' : ''}`),
+        import('../services/exportUtils'),
+      ]);
+      if (format === 'pdf') {
+        await exporter.exportVisitHistoryPDF(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em PDF com fotos!`);
+      } else {
+        exporter.exportVisitHistoryExcel(report);
+        toast('ok', `Histórico da Visita #${visitId} baixado em Excel!`);
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao baixar histórico da visita.');
+    } finally {
+      setDownloadingVisitId(null);
+    }
+  };
 
   const openChecklist = async (visit: any) => {
     setSelectedVisit(visit);
@@ -107,7 +223,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       opportunities_found: visit.opportunities_found || '',
     });
     const items = await apiFetch(`/visits/${visit.id}/checklist`);
-    setChecklist(items);
+    setChecklist(Array.isArray(items) ? items : []);
   };
 
   const toggleCheckItem = async (item: any) => {
@@ -117,7 +233,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
         body: JSON.stringify({ completed: !item.completed }),
       });
       if (Array.isArray(updated)) setChecklist(updated);
-      void loadAll();
+      void loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao atualizar checklist.');
     }
@@ -133,7 +249,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       });
       if (Array.isArray(updated)) setChecklist(updated);
       setNewCheckItem('');
-      void loadAll();
+      void loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao adicionar item.');
     }
@@ -145,7 +261,10 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       if (navigator.geolocation) {
         await new Promise<void>((resolve) => {
           navigator.geolocation.getCurrentPosition(
-            (pos) => { coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }; resolve(); },
+            (pos) => {
+              coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+              resolve();
+            },
             () => resolve(),
             { timeout: 2500 }
           );
@@ -153,7 +272,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       }
       await apiFetch(`/visits/${visitId}/checkin`, { method: 'POST', body: JSON.stringify(coords) });
       toast('ok', 'Check-in realizado!');
-      await loadAll();
+      await loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao realizar check-in.');
     }
@@ -164,7 +283,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       await apiFetch(`/visits/${visitId}/checkout`, { method: 'POST', body: JSON.stringify(checkoutNotes) });
       setSelectedVisit(null);
       toast('ok', 'Visita finalizada com sucesso!');
-      await loadAll();
+      await loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Não foi possível finalizar a visita.');
     }
@@ -182,7 +301,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       setCancelVisitId(null);
       setCancelReason('');
       toast('ok', 'Visita cancelada.');
-      await loadAll();
+      await loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao cancelar visita.');
     }
@@ -214,7 +333,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
         toast('info', `${queuedCount} foto(s) salva(s) na fila offline!`);
       } else {
         toast('ok', `${okCount} foto(s) de "${visitPhotoArea}" enviada(s) automaticamente em HD ao Telegram!`);
-        void loadAll();
+        void loadVisitsOnly();
       }
     } catch (err: any) {
       toast('err', err.message || 'Erro ao enviar foto.');
@@ -238,7 +357,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
           ? 'Foto removida do site e apagada automaticamente do Telegram!'
           : 'Foto removida da visita.'
       );
-      void loadAll();
+      void loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao remover foto.');
     }
@@ -338,7 +457,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       await apiFetch('/visits', { method: 'POST', body: JSON.stringify({ ...newVisit, store_id: Number(newVisit.store_id) }) });
       setShowNewVisit(false);
       toast('ok', 'Visita agendada!');
-      void loadAll();
+      void loadVisitsOnly();
     } catch (err: any) {
       toast('err', err.message || 'Erro ao agendar visita.');
     }
@@ -349,7 +468,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
     try {
       await apiFetch('/routes', { method: 'POST', body: JSON.stringify(newRoute) });
       setShowNewRoute(false);
-      setNewRoute({ name: '', region: 'Zona Sul', day_of_week: 'Segunda-feira', store_ids: [], notes: '' });
+      setNewRoute({ name: '', region: 'Centro', day_of_week: 'Segunda-feira', store_ids: [], notes: '' });
       toast('ok', 'Rota criada com sucesso!');
       void loadAll();
     } catch (err: any) {
@@ -363,7 +482,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-extrabold text-slate-900">Roteirização e Produtividade</h1>
+            <h1 className="font-display text-xl font-extrabold text-slate-900">Roteirização e Produtividade</h1>
             <p className="text-sm text-slate-500">Planejamento semanal, organização por região/proximidade e controle de tempo</p>
           </div>
           {isManager && (
@@ -374,7 +493,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
         </div>
 
         {showNewRoute && (
-          <form onSubmit={createRoute} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
+          <form onSubmit={createRoute} className="bg-white p-5 rounded-3xl border border-slate-200 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <input required placeholder="Nome da Rota" value={newRoute.name} onChange={(e) => setNewRoute({ ...newRoute, name: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
               <input required placeholder="Região" value={newRoute.region} onChange={(e) => setNewRoute({ ...newRoute, region: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
@@ -391,10 +510,12 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
                     <button
                       type="button"
                       key={s.id}
-                      onClick={() => setNewRoute({
-                        ...newRoute,
-                        store_ids: selected ? newRoute.store_ids.filter((id) => id !== s.id) : [...newRoute.store_ids, s.id],
-                      })}
+                      onClick={() =>
+                        setNewRoute({
+                          ...newRoute,
+                          store_ids: selected ? newRoute.store_ids.filter((id) => id !== s.id) : [...newRoute.store_ids, s.id],
+                        })
+                      }
                       className={`px-3 py-1.5 rounded-xl text-xs font-semibold border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-700 border-slate-200'}`}
                     >
                       {s.name} ({s.region})
@@ -412,7 +533,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
             const ids: number[] = JSON.parse(r.store_ids_json || '[]');
             const routeStores = ids.map((id) => stores.find((s) => s.id === id)).filter(Boolean);
             return (
-              <div key={r.id} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
+              <div key={r.id} className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="font-bold text-slate-900">{r.name}</div>
@@ -435,20 +556,24 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
           })}
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
           <h2 className="font-bold text-slate-800">Lojas Pendentes / Não Atendidas</h2>
           <div className="divide-y divide-slate-100">
-            {unattended.map((v) => (
-              <div key={v.id} className="py-2.5 flex items-center justify-between text-sm">
-                <div>
-                  <span className="font-semibold">{v.store_name}</span>
-                  <span className="text-xs text-slate-500 ml-2">{v.scheduled_date} {v.scheduled_time}</span>
+            {unattended.length === 0 ? (
+              <div className="py-4 text-xs text-slate-400 text-center">Nenhuma loja pendente ou não atendida.</div>
+            ) : (
+              unattended.map((v) => (
+                <div key={v.id} className="py-2.5 flex items-center justify-between text-sm">
+                  <div>
+                    <span className="font-semibold">{v.store_name}</span>
+                    <span className="text-xs text-slate-500 ml-2">{v.scheduled_date} {v.scheduled_time}</span>
+                  </div>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${v.status === 'Não Atendida' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {v.status}
+                  </span>
                 </div>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${v.status === 'Não Atendida' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                  {v.status}
-                </span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -456,110 +581,291 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-extrabold text-slate-900">Minhas Visitas & Checklist Inteligente</h1>
-          <p className="text-sm text-slate-500">Check-in/Check-out no PDV, controle de tempo, fotos e checklist personalizável</p>
+    <div className="space-y-5">
+      {/* Header Banner Diário */}
+      <div className="bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950 text-white rounded-3xl p-5 sm:p-6 shadow-lg space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-200 text-[11px] font-bold mb-1">
+              <Calendar className="w-3.5 h-3.5" /> {periodDescription}
+            </div>
+            <h1 className="font-display text-xl sm:text-2xl font-extrabold tracking-tight">
+              Minhas Visitas & Pesquisas do Dia
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300">
+              Por padrão exibe apenas as visitas de hoje. Use o filtro abaixo para consultar outras datas ou períodos.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowNewVisit(!showNewVisit)}
+            className="px-4 py-2.5 bg-blue-500 hover:bg-blue-400 text-white text-xs font-extrabold rounded-xl inline-flex items-center gap-1.5 shadow-md transition"
+          >
+            <Plus className="w-4 h-4" /> Agendar Visita
+          </button>
         </div>
-        <button onClick={() => setShowNewVisit(!showNewVisit)} className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl flex items-center gap-1.5">
-          <Plus className="w-4 h-4" /> Agendar Visita
-        </button>
+
+        {/* Métricas do período selecionado */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          {[
+            { label: 'No Filtro', val: filteredVisits.length },
+            { label: 'Em Andamento', val: filteredVisits.filter((v) => v.status === 'Em Andamento').length },
+            { label: 'Concluídas', val: filteredVisits.filter((v) => v.status === 'Concluída').length },
+            { label: 'Pendentes', val: filteredVisits.filter((v) => v.status === 'Pendente').length },
+          ].map((m) => (
+            <div key={m.label} className="px-3.5 py-2.5 rounded-2xl bg-white/8 border border-white/10">
+              <div className="text-lg font-extrabold tabular-nums">{m.val}</div>
+              <div className="text-[11px] text-slate-300">{m.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Barra de Filtro de Data / Período */}
+      <div className="bg-white rounded-3xl border border-slate-200/80 p-4 space-y-3 shadow-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mr-1 inline-flex items-center gap-1">
+            <Filter className="w-3.5 h-3.5" /> Período:
+          </span>
+          {[
+            { id: 'hoje', label: 'Hoje' },
+            { id: 'ontem', label: 'Ontem' },
+            { id: '7dias', label: 'Últimos 7 dias' },
+            { id: 'mes', label: 'Este mês' },
+            { id: 'data', label: 'Escolher Data' },
+            { id: 'periodo', label: 'Período (De/Até)' },
+            { id: 'todas', label: 'Todas' },
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setDateMode(opt.id as DateFilterMode)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                dateMode === opt.id
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {(dateMode === 'data' || dateMode === 'periodo') && (
+          <div className="flex flex-wrap items-center gap-2.5 p-3 rounded-2xl bg-blue-50/60 border border-blue-200/80 text-xs">
+            <CalendarRange className="w-4 h-4 text-blue-600 shrink-0" />
+            {dateMode === 'data' ? (
+              <label className="flex items-center gap-2 font-bold text-slate-700">
+                Data:
+                <input
+                  type="date"
+                  value={singleDate}
+                  onChange={(e) => setSingleDate(e.target.value)}
+                  className="px-3 py-1.5 border border-slate-300 bg-white rounded-xl text-xs font-semibold"
+                />
+              </label>
+            ) : (
+              <>
+                <label className="flex items-center gap-2 font-bold text-slate-700">
+                  De:
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="px-3 py-1.5 border border-slate-300 bg-white rounded-xl text-xs font-semibold"
+                  />
+                </label>
+                <label className="flex items-center gap-2 font-bold text-slate-700">
+                  Até:
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="px-3 py-1.5 border border-slate-300 bg-white rounded-xl text-xs font-semibold"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-2.5 pt-1 border-t border-slate-100">
+          <div className="flex-1 relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={searchStore}
+              onChange={(e) => setSearchStore(e.target.value)}
+              placeholder="Filtrar por loja, endereço ou promotor..."
+              className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {['Todas', 'Em Andamento', 'Pendente', 'Concluída', 'Cancelada'].map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatusFilter(st)}
+                className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition ${
+                  statusFilter === st ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {showNewVisit && (
-        <form onSubmit={createVisit} className="bg-white p-5 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <select required value={newVisit.store_id} onChange={(e) => setNewVisit({ ...newVisit, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
+        <form onSubmit={createVisit} className="bg-white p-5 rounded-3xl border border-blue-200 grid grid-cols-1 sm:grid-cols-4 gap-3 shadow-xs">
+          <select required value={newVisit.store_id} onChange={(e) => setNewVisit({ ...newVisit, store_id: e.target.value })} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white">
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          <input type="date" required value={newVisit.scheduled_date} onChange={(e) => setNewVisit({ ...newVisit, scheduled_date: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
-          <input type="time" value={newVisit.scheduled_time} onChange={(e) => setNewVisit({ ...newVisit, scheduled_time: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
-          <button type="submit" className="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-xl">Confirmar Visita</button>
+          <input type="date" required value={newVisit.scheduled_date} onChange={(e) => setNewVisit({ ...newVisit, scheduled_date: e.target.value })} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm" />
+          <input type="time" value={newVisit.scheduled_time} onChange={(e) => setNewVisit({ ...newVisit, scheduled_time: e.target.value })} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm" />
+          <button type="submit" className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl">Confirmar Visita</button>
         </form>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-3">
-          {visits.map((v) => {
-            const pct = v.checklist_total ? Math.round((v.checklist_done / v.checklist_total) * 100) : 0;
-            return (
-              <div key={v.id} className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <div className="font-bold text-slate-900 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-blue-600" />
-                      {v.store_name}
-                      <span className="text-xs font-normal text-slate-500">({v.store_type})</span>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-0.5">{v.store_address} • {v.scheduled_date} às {v.scheduled_time}</div>
-                  </div>
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                    v.status === 'Concluída' ? 'bg-emerald-100 text-emerald-700' :
-                    v.status === 'Em Andamento' ? 'bg-blue-100 text-blue-700' :
-                    (v.status === 'Não Atendida' || v.status === 'Cancelada') ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {v.status}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3 text-xs text-slate-600">
-                  <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {v.duration_minutes ? `${v.duration_minutes} min` : 'Aguardando'}</span>
-                  <span>Checklist: <b>{v.checklist_done}/{v.checklist_total} ({pct}%)</b></span>
-                </div>
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct}%` }} />
-                </div>
-
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {onOpenStore && (
-                    <button
-                      onClick={() => onOpenStore(v.store_id)}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center gap-1"
-                    >
-                      <Play className="w-3.5 h-3.5" /> Abrir Fluxo na Loja
-                    </button>
-                  )}
-                  {v.status === 'Pendente' && (
-                    <button onClick={() => handleCheckin(v.id)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1">
-                      <Play className="w-3.5 h-3.5" /> Check-in Rápido
-                    </button>
-                  )}
-                  <button onClick={() => openChecklist(v)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1">
-                    <ListChecks className="w-3.5 h-3.5" /> Checklist & Detalhes
-                  </button>
-                  <button
-                    type="button"
-                    disabled={downloadingVisitId === v.id}
-                    onClick={() => void handleDownloadVisit(v.id, 'pdf')}
-                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <FileText className="w-3.5 h-3.5" /> {downloadingVisitId === v.id ? 'Gerando...' : 'Baixar PDF'}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={downloadingVisitId === v.id}
-                    onClick={() => void handleDownloadVisit(v.id, 'excel')}
-                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-                  </button>
-                  {(v.status === 'Pendente' || v.status === 'Em Andamento') && (
-                    <button onClick={() => { setCancelVisitId(v.id); setCancelReason(''); }} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1">
-                      <XCircle className="w-3.5 h-3.5" /> Cancelar Visita
-                    </button>
-                  )}
-                </div>
+          {loadingVisits ? (
+            <div className="space-y-3 animate-pulse">
+              <div className="h-32 rounded-3xl bg-white border border-slate-200" />
+              <div className="h-32 rounded-3xl bg-white border border-slate-200" />
+            </div>
+          ) : filteredVisits.length === 0 ? (
+            <div className="bg-white p-8 rounded-3xl border border-slate-200 text-center space-y-3">
+              <Calendar className="w-10 h-10 text-slate-300 mx-auto" />
+              <div className="font-bold text-slate-800 text-sm">
+                {dateMode === 'hoje'
+                  ? 'Nenhuma visita registrada para hoje ainda'
+                  : 'Nenhuma visita encontrada neste filtro'}
               </div>
-            );
-          })}
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                {dateMode === 'hoje'
+                  ? 'Inicie uma visita em uma loja ou agende acima. Para ver visitas de dias anteriores, selecione uma data ou período no filtro acima.'
+                  : 'Ajuste o período ou os filtros de status para localizar visitas anteriores.'}
+              </p>
+              {dateMode === 'hoje' && (
+                <div className="flex flex-wrap justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setDateMode('7dias')}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                  >
+                    Ver últimos 7 dias
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDateMode('periodo')}
+                    className="px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold"
+                  >
+                    Filtrar por período
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            filteredVisits.map((v) => {
+              const pct = v.checklist_total ? Math.round((v.checklist_done / v.checklist_total) * 100) : 0;
+              return (
+                <div key={v.id} className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="font-extrabold text-slate-900 flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span>{v.store_name}</span>
+                        <span className="text-xs font-normal text-slate-500">({v.store_type})</span>
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {v.store_address} • {formatBrDate(v.scheduled_date)} às {v.scheduled_time} • {v.promoter_name}
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                        v.status === 'Concluída'
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : v.status === 'Em Andamento'
+                          ? 'bg-blue-100 text-blue-700'
+                          : v.status === 'Não Atendida' || v.status === 'Cancelada'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {v.status}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3 text-xs text-slate-600">
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" /> {v.duration_minutes ? `${v.duration_minutes} min` : 'Aguardando'}
+                    </span>
+                    <span>
+                      Checklist: <b>{v.checklist_done}/{v.checklist_total} ({pct}%)</b>
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct}%` }} />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {onOpenStore && (
+                      <button
+                        onClick={() => onOpenStore(v.store_id)}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center gap-1"
+                      >
+                        <Play className="w-3.5 h-3.5" /> Abrir Fluxo na Loja
+                      </button>
+                    )}
+                    {v.status === 'Pendente' && (
+                      <button onClick={() => handleCheckin(v.id)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-1">
+                        <Play className="w-3.5 h-3.5" /> Check-in Rápido
+                      </button>
+                    )}
+                    <button onClick={() => openChecklist(v)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl flex items-center gap-1">
+                      <ListChecks className="w-3.5 h-3.5" /> Checklist & Detalhes
+                    </button>
+                    <button
+                      type="button"
+                      disabled={downloadingVisitId === v.id}
+                      onClick={() => void handleDownloadVisit(v.id, 'pdf')}
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <FileText className="w-3.5 h-3.5" /> {downloadingVisitId === v.id ? 'Gerando...' : 'Baixar PDF'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={downloadingVisitId === v.id}
+                      onClick={() => void handleDownloadVisit(v.id, 'excel')}
+                      className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-xl flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+                    </button>
+                    {(v.status === 'Pendente' || v.status === 'Em Andamento') && (
+                      <button
+                        onClick={() => {
+                          setCancelVisitId(v.id);
+                          setCancelReason('');
+                        }}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-red-100 text-red-700 text-xs font-bold rounded-xl flex items-center gap-1"
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Cancelar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
 
-        {/* Checklist & Checkout Drawer/Panel */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 h-fit sticky top-20 space-y-4">
+        {/* Checklist & Checkout Panel */}
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 h-fit sticky top-20 space-y-4 shadow-xs">
           {selectedVisit ? (
             <>
               <div className="border-b border-slate-100 pb-3">
-                <div className="font-bold text-slate-900">{selectedVisit.store_name}</div>
+                <div className="font-extrabold text-slate-900">{selectedVisit.store_name}</div>
                 <div className="text-xs text-slate-500">Checklist Inteligente da Visita #{selectedVisit.id}</div>
               </div>
 
@@ -781,7 +1087,7 @@ export const VisitsAndRoutesPage: React.FC<{ mode: 'visitas' | 'roteiros'; onOpe
 
       {cancelVisitId !== null && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <form onSubmit={confirmCancelVisit} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+          <form onSubmit={confirmCancelVisit} className="bg-white rounded-3xl w-full max-w-md p-5 space-y-4 shadow-2xl">
             <h2 className="font-bold text-slate-900">Cancelar Visita #{cancelVisitId}</h2>
             <textarea
               value={cancelReason}

@@ -1,5 +1,5 @@
-const STATIC_CACHE = 'merchandising-pro-static-v2';
-const API_CACHE = 'merchandising-pro-api-v2';
+const STATIC_CACHE = 'merchandising-pro-static-v3';
+const API_CACHE = 'merchandising-pro-api-v3';
 const STATIC_ASSETS = ['/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', (event) => {

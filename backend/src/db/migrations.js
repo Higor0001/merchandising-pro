@@ -20,6 +20,7 @@ async function runIncrementalMigrations() {
             'migration_pepsico_si5_clean_v1',
             'migration_pepsico_catalog_v2',
             'migration_dedup_pepsico_v3',
+            'migration_clear_history_site_only_v1',
           ],
         },
       })
@@ -365,6 +366,44 @@ async function runIncrementalMigrations() {
       await countersCol.updateOne(
         { _id: 'migration_dedup_pepsico_v3' },
         { $set: { seq: deactivatedCount, migrated_at: migratedAt } },
+        { upsert: true }
+      );
+    }
+
+    // 6. Limpeza pontual do histórico operacional e fotos APENAS no site/MongoDB (mantendo 100% no Telegram)
+    const alreadyClearedHistoryV1 = doneSet.has('migration_clear_history_site_only_v1');
+    if (!alreadyClearedHistoryV1) {
+      const clearedAt = nowStr();
+      const collectionsToClear = [
+        'visits',
+        'visit_evidences',
+        'visit_diagnostics',
+        'visit_checklists',
+        'replenishments',
+        'occurrences',
+        'price_checks',
+        'expiry_checks',
+        'displays_exposures',
+        'planogram_audits',
+        'campaign_executions',
+        'store_inventory',
+        'inventory_movements',
+        'ai_analyses',
+        'uploads.files',
+        'uploads.chunks',
+      ];
+      await Promise.all(
+        collectionsToClear.map(async (name) => {
+          try {
+            await (await col(name)).deleteMany({});
+          } catch {
+            // ignorar se coleção ainda não existir
+          }
+        })
+      );
+      await countersCol.updateOne(
+        { _id: 'migration_clear_history_site_only_v1' },
+        { $set: { seq: collectionsToClear.length, migrated_at: clearedAt } },
         { upsert: true }
       );
     }

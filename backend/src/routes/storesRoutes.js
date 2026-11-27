@@ -6,7 +6,7 @@ const { authenticate, authorize, logAudit } = require('../middleware/auth');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
 const { sendPhotoToTelegram, deleteTelegramMessage } = require('../services/telegramService');
 const { applyAuditWatermark } = require('../services/imageAnnotator');
-const { canOperateVisit, parseUtcTimestamp } = require('../utils/security');
+const { canOperateVisit, parseUtcTimestamp, getBrazilDateStr } = require('../utils/security');
 
 const router = express.Router();
 router.use(authenticate);
@@ -138,18 +138,40 @@ router.post('/routes', authorize('admin', 'supervisor'), async (req, res, next) 
 // --- VISITS & CHECKLISTS ---
 router.get('/visits', async (req, res, next) => {
   try {
-    const { status, store_id, promoter_id } = req.query;
+    const { status, store_id, promoter_id, date, start_date, end_date, today_only } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (store_id) filter.store_id = Number(store_id);
     if (promoter_id) filter.promoter_id = Number(promoter_id);
 
-    const [visits, stores, users, checklists] = await Promise.all([
-      (await col('visits')).find(filter, { projection: { _id: 0 } }).sort({ scheduled_date: -1, scheduled_time: 1 }).toArray(),
+    const [visitsRaw, stores, users, checklists] = await Promise.all([
+      (await col('visits')).find(filter, { projection: { _id: 0 } }).sort({ scheduled_date: -1, scheduled_time: 1, id: -1 }).toArray(),
       (await col('stores')).find({}, { projection: { _id: 0, id: 1, name: 1, type: 1, address: 1, region: 1 } }).toArray(),
       (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
       (await col('visit_checklists')).find({}, { projection: { _id: 0, visit_id: 1, completed: 1 } }).toArray(),
     ]);
+
+    const extractVisitDay = (v) => {
+      if (v.scheduled_date && /^\d{4}-\d{2}-\d{2}/.test(String(v.scheduled_date))) {
+        return String(v.scheduled_date).slice(0, 10);
+      }
+      const ref = parseUtcTimestamp(v.checkin_at || v.created_at);
+      return ref ? getBrazilDateStr(ref) : '';
+    };
+
+    const effectiveDate = today_only === 'true' || today_only === '1' ? getBrazilDateStr() : date ? String(date).slice(0, 10) : '';
+    const startDay = start_date ? String(start_date).slice(0, 10) : '';
+    const endDay = end_date ? String(end_date).slice(0, 10) : '';
+
+    const visits = visitsRaw.filter((v) => {
+      const day = extractVisitDay(v);
+      if (effectiveDate) {
+        return day === effectiveDate;
+      }
+      if (startDay && (!day || day < startDay)) return false;
+      if (endDay && (!day || day > endDay)) return false;
+      return true;
+    });
 
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
