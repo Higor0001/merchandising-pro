@@ -230,6 +230,7 @@ router.get('/displays', async (req, res, next) => {
         store_name: storeMap[d.store_id] || '-',
         brand_name: d.brand_id ? brandMap[d.brand_id] || '' : 'Todas',
         product_name: d.product_id ? prodMap[d.product_id]?.name || '' : 'Todos',
+        product_weight: d.product_weight || (d.product_id ? prodMap[d.product_id]?.weight || '' : ''),
         promoter_name: userMap[d.promoter_id] || '',
       }))
     );
@@ -244,7 +245,7 @@ router.post(
     let wmBeforePath = null;
     let wmAfterPath = null;
     try {
-      const { visit_id, store_id, category, brand_id, product_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
+      const { visit_id, store_id, category, brand_id, product_id, product_weight, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
       if (!store_id || !category || !exposure_type) {
         return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
       }
@@ -311,6 +312,7 @@ router.post(
         category,
         brand_id: brand_id ? Number(brand_id) : null,
         product_id: product_id ? Number(product_id) : null,
+        product_weight: String(product_weight || '').trim(),
         exposure_type,
         facings_actual: Number(facings_actual || 0),
         facings_expected: Number(facings_expected || 0),
@@ -322,7 +324,7 @@ router.post(
         created_at: capturedAt,
       });
 
-      const details = `Categoria: ${category} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
+      const details = `Categoria: ${category}${product_weight ? ` | Gramatura: ${product_weight}` : ''} | Frentes: ${facings_actual || 0}/${facings_expected || 0}${pos_materials ? ` | Materiais: ${pos_materials}` : ''}${notes ? ` | Obs: ${notes}` : ''}`;
 
       if (tgBeforePath) {
         await sendPhotoToTelegram({
@@ -432,7 +434,7 @@ router.get('/planograms', async (_req, res, next) => {
 
 router.post('/planograms', enforceVisitExecutionIntegrity, async (req, res, next) => {
   try {
-    const { visit_id, store_id, category, brand_id, product_id, ideal_facings, actual_facings, total_category_facings, competitor_facings, position_level, notes } = req.body || {};
+    const { visit_id, store_id, category, brand_id, product_id, product_weight, ideal_facings, actual_facings, total_category_facings, competitor_facings, position_level, notes } = req.body || {};
     if (!store_id || !category) return res.status(400).json({ error: 'Loja e categoria são obrigatórias.' });
 
     const ideal = Number(ideal_facings || 4);
@@ -450,6 +452,7 @@ router.post('/planograms', enforceVisitExecutionIntegrity, async (req, res, next
       category,
       brand_id: brand_id ? Number(brand_id) : null,
       product_id: product_id ? Number(product_id) : null,
+      product_weight: String(product_weight || '').trim(),
       ideal_facings: ideal,
       actual_facings: actual,
       total_category_facings: total,

@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { z } = require('zod');
 const { col, nextId, nowStr, hashPasswordAsync, verifyPasswordAsync } = require('../db/database');
@@ -7,6 +8,71 @@ const { getJwtSecret, authenticate, authorize, logAudit } = require('../middlewa
 const router = express.Router();
 
 const ALLOWED_ROLES = ['promotor', 'supervisor', 'admin'];
+
+const PROVISIONAL_CERT_INFO = {
+  serial: 'MPRO-CERT-PROV-2026-HIGOR-CI',
+  tipo: 'Certificado Digital Provisório',
+  sistema: 'MERCHANDISING PRO',
+  promotor: 'Higor',
+  cidade: 'Cachoeiro de Itapemirim',
+  uf: 'ES',
+  email: 'higor@merchandising.com',
+  emitido_em: '2026-11-27T03:40:00-03:00',
+  status: 'ATIVO (Tela de Login Desativada Provisoriamente)',
+};
+
+function isProvisionalLoginBypassEnabled() {
+  return String(process.env.REQUIRE_LOGIN || '').trim().toLowerCase() !== 'true';
+}
+
+function buildProvisionalCertificate() {
+  const payload = `${PROVISIONAL_CERT_INFO.serial}|${PROVISIONAL_CERT_INFO.promotor}|${PROVISIONAL_CERT_INFO.cidade}|${PROVISIONAL_CERT_INFO.emitido_em}`;
+  const fingerprint = crypto.createHash('sha256').update(payload).digest('hex').toUpperCase();
+  return {
+    ...PROVISIONAL_CERT_INFO,
+    algoritmo: 'SHA-256',
+    assinatura_digital: fingerprint,
+  };
+}
+
+async function ensureProvisionalHigorUser() {
+  const users = await col('users');
+  let user = await users.findOne({ email: PROVISIONAL_CERT_INFO.email });
+  if (!user) {
+    const id = await nextId('users');
+    const randomPass = crypto.randomBytes(18).toString('base64url');
+    const passwordHash = await hashPasswordAsync(randomPass);
+    user = {
+      id,
+      name: PROVISIONAL_CERT_INFO.promotor,
+      email: PROVISIONAL_CERT_INFO.email,
+      password_hash: passwordHash,
+      role: 'admin',
+      region: PROVISIONAL_CERT_INFO.cidade,
+      city: PROVISIONAL_CERT_INFO.cidade,
+      title: 'Promotor',
+      phone: '',
+      active: 1,
+      created_at: nowStr(),
+    };
+    await users.insertOne(user);
+  } else if (!user.active || user.name !== PROVISIONAL_CERT_INFO.promotor || user.region !== PROVISIONAL_CERT_INFO.cidade) {
+    await users.updateOne(
+      { id: user.id },
+      {
+        $set: {
+          name: PROVISIONAL_CERT_INFO.promotor,
+          region: PROVISIONAL_CERT_INFO.cidade,
+          city: PROVISIONAL_CERT_INFO.cidade,
+          title: 'Promotor',
+          active: 1,
+        },
+      }
+    );
+    user = await users.findOne({ id: user.id });
+  }
+  return user;
+}
 
 const loginSchema = z.object({
   email: z.string().trim().email('E-mail inválido.'),
@@ -54,6 +120,45 @@ router.post('/login', async (req, res, next) => {
         role: user.role,
         region: user.region,
         phone: user.phone,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/provisional-certificate', (_req, res) => {
+  res.json({
+    login_disabled: isProvisionalLoginBypassEnabled(),
+    certificate: buildProvisionalCertificate(),
+  });
+});
+
+router.post('/provisional', async (_req, res, next) => {
+  try {
+    if (!isProvisionalLoginBypassEnabled()) {
+      return res.status(403).json({ error: 'Acesso provisório desativado. Utilize a tela de login.' });
+    }
+    const user = await ensureProvisionalHigorUser();
+    const certificate = buildProvisionalCertificate();
+    const token = jwt.sign(
+      { id: user.id, role: user.role, provisional: true, cert_serial: certificate.serial },
+      getJwtSecret(),
+      { expiresIn: '7d' }
+    );
+    res.json({
+      token,
+      login_disabled: true,
+      certificate,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        region: user.region || PROVISIONAL_CERT_INFO.cidade,
+        city: PROVISIONAL_CERT_INFO.cidade,
+        title: 'Promotor',
+        phone: user.phone || '',
       },
     });
   } catch (err) {

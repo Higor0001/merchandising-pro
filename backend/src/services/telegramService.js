@@ -117,9 +117,9 @@ async function sendPhotoToTelegram({
     const mimeType = detectMimeType(filePath);
     const blob = new Blob([buffer], { type: mimeType });
 
-    const useCompressedPhoto = (process.env.TELEGRAM_PHOTO_MODE || 'hd').trim().toLowerCase() === 'compressed';
-    const endpoint = useCompressedPhoto ? 'sendPhoto' : 'sendDocument';
-    const fieldName = useCompressedPhoto ? 'photo' : 'document';
+    // Toda e qualquer imagem enviada pelo site é entregue em HD via sendDocument (sem compressão do Telegram)
+    const endpoint = 'sendDocument';
+    const fieldName = 'document';
 
     const caption = buildTelegramPhotoCaption({
       reason,
@@ -130,7 +130,7 @@ async function sendPhotoToTelegram({
       area,
       visitId,
       isPanoramic,
-      mode: useCompressedPhoto ? 'compressed' : 'hd',
+      mode: 'hd',
       capturedAt,
     });
 
@@ -156,7 +156,7 @@ async function sendPhotoToTelegram({
 
     return {
       sent: true,
-      mode: useCompressedPhoto ? 'compressed' : 'hd',
+      mode: 'hd',
       message_id: messageId,
       chat_id: chatId,
     };

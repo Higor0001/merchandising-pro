@@ -16,14 +16,20 @@ interface PhotoInputProps {
 }
 
 /**
- * Redimensiona a foto preservando qualidade HD (máx 2560px; panorâmicas até 4096px, JPEG 92%)
- * para nitidez em etiquetas/gôndolas, fotos panorâmicas e envio em HD ao Telegram.
+ * Preserva 100% de qualidade HD em toda e qualquer foto enviada pelo site:
+ * - Mantém o arquivo original intacto (zero recompressão) quando já é JPG/PNG/WebP até 8,5 MB e dentro de 4096px (6000px panorâmica).
+ * - Quando ultrapassa o limite, redimensiona em alta definição (4096px / 6000px panorâmica) com suavização high e JPEG 96%.
  */
-async function compressImageFile(
+export async function prepareHdImageFile(
   file: File,
-  maxSize = 2560,
-  quality = 0.92
+  maxSize = 4096,
+  quality = 0.96
 ): Promise<{ compressed: File; previewUrl: string; isPanoramic: boolean }> {
+  const MAX_ORIGINAL_BYTES = 8.5 * 1024 * 1024;
+  const supportedNativeMime = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(
+    String(file.type || '').toLowerCase()
+  );
+
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -33,7 +39,14 @@ async function compressImageFile(
         let { width, height } = img;
         const aspect = width > 0 && height > 0 ? Math.max(width / height, height / width) : 1;
         const isPanoramic = aspect >= 2.0;
-        const effectiveMax = isPanoramic ? Math.max(maxSize, 4096) : maxSize;
+        const effectiveMax = isPanoramic ? Math.max(maxSize, 6000) : maxSize;
+
+        // Se a foto original já é HD compatível e cabe com folga no upload, envia o arquivo original SEM recompressão!
+        if (supportedNativeMime && file.size <= MAX_ORIGINAL_BYTES && width <= effectiveMax && height <= effectiveMax) {
+          resolve({ compressed: file, previewUrl: dataUrl, isPanoramic });
+          return;
+        }
+
         if (width > effectiveMax || height > effectiveMax) {
           if (width >= height) {
             height = Math.round((height * effectiveMax) / width);
@@ -51,6 +64,8 @@ async function compressImageFile(
           resolve({ compressed: file, previewUrl: dataUrl, isPanoramic });
           return;
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, width, height);
         const compressedUrl = canvas.toDataURL('image/jpeg', quality);
         canvas.toBlob(
@@ -112,7 +127,7 @@ export const PhotoInput: React.FC<PhotoInputProps> = ({
       return;
     }
 
-    const processed = await Promise.all(fileList.map((f) => compressImageFile(f)));
+    const processed = await Promise.all(fileList.map((f) => prepareHdImageFile(f)));
     const compressedFiles = processed.map((p) => p.compressed);
 
     if (autoClear || multiple) {

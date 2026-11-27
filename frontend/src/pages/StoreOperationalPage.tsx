@@ -28,8 +28,13 @@ import {
 import { apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { PhotoInput } from '../components/PhotoInput';
+import { PhotoInput, prepareHdImageFile } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
+import {
+  collectAvailableWeights,
+  groupProductsWithoutWeight,
+  resolveProductIdByBaseAndWeight,
+} from '../utils/productWeights';
 import {
   loadProductsWithDeviceCache,
   syncFullCatalogFromSi5,
@@ -131,6 +136,8 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     exposure_type: 'Gôndola',
     category: 'Todos',
     brand_id: '',
+    product_base_name: '',
+    product_weight: '',
     product_id: '',
     facings_actual: '6',
     facings_expected: '6',
@@ -394,8 +401,9 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
     setUploadingPhoto(true);
     setUploadProgressText(`Substituindo foto (${ev.area || stage}) e removendo a anterior do Telegram...`);
     try {
+      const prepared = await prepareHdImageFile(file);
       const fd = new FormData();
-      fd.append('photo', file);
+      fd.append('photo', prepared.compressed);
       fd.append('stage', stage);
       fd.append('area', ev.area || 'Gôndola Principal');
       fd.append('replace_evidence_id', String(ev.id));
@@ -546,6 +554,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
       fd.append('category', expForm.category);
       if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
       if (expForm.product_id) fd.append('product_id', expForm.product_id);
+      if (expForm.product_weight) fd.append('product_weight', expForm.product_weight);
       fd.append('facings_actual', expForm.facings_actual);
       fd.append('facings_expected', expForm.facings_expected);
       fd.append('planogram_compliant', String(expForm.planogram_compliant));
@@ -1455,14 +1464,18 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                   ? null
                   : new Set(products.filter((p) => (p.category || '') === expForm.category && p.brand_id).map((p) => Number(p.brand_id)));
                 const expBrands = validBrandIds ? brands.filter((b) => validBrandIds.has(Number(b.id))) : brands;
-                const expProducts = products.filter((p) => {
+                const expProductsRaw = products.filter((p) => {
                   if (expForm.category !== 'Todos' && (p.category || '') !== expForm.category) return false;
                   if (expForm.brand_id && Number(p.brand_id) !== Number(expForm.brand_id)) return false;
                   return true;
                 });
+                const expGroups = groupProductsWithoutWeight(expProductsRaw);
+                const expSelectedGroup = expGroups.find((g) => g.baseName === expForm.product_base_name) || null;
+                const primaryWeights = expSelectedGroup ? expSelectedGroup.weights : collectAvailableWeights(expProductsRaw);
+                const otherWeights = collectAvailableWeights(products).filter((w) => !primaryWeights.includes(w));
                 return (
                 <form onSubmit={handleSaveExposure} className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                     <select
                       value={expForm.exposure_type}
                       onChange={(e) => setExpForm({ ...expForm, exposure_type: e.target.value })}
@@ -1472,7 +1485,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     </select>
                     <select
                       value={expForm.category}
-                      onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_id: '' })}
+                      onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_base_name: '', product_weight: '', product_id: '' })}
                       className="px-3 py-2 border rounded-xl text-sm bg-white"
                     >
                       {expCategories.map((c) => (
@@ -1481,23 +1494,48 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     </select>
                     <select
                       value={expForm.brand_id}
-                      onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_id: '' })}
+                      onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_base_name: '', product_weight: '', product_id: '' })}
                       className="px-3 py-2 border rounded-xl text-sm bg-white"
                     >
                       <option value="">Todos ({expBrands.length} marcas)</option>
                       {expBrands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                     <select
-                      value={expForm.product_id}
-                      onChange={(e) => setExpForm({ ...expForm, product_id: e.target.value })}
+                      value={expForm.product_base_name}
+                      onChange={(e) => {
+                        const base = e.target.value;
+                        const grp = expGroups.find((g) => g.baseName === base);
+                        const autoW = grp && grp.weights.length === 1 ? grp.weights[0] : '';
+                        const pid = resolveProductIdByBaseAndWeight(expGroups, base, autoW);
+                        setExpForm({ ...expForm, product_base_name: base, product_weight: autoW, product_id: pid });
+                      }}
                       className="px-3 py-2 border rounded-xl text-sm bg-white"
                     >
-                      <option value="">Todos ({expProducts.length} itens)</option>
-                      {expProducts.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}{p.weight && !p.name.toLowerCase().includes(p.weight.toLowerCase().replace(/\s+/g, '')) ? ` (${p.weight})` : ''}
-                        </option>
+                      <option value="">Todos ({expGroups.length} itens)</option>
+                      {expGroups.map((g) => (
+                        <option key={g.baseName} value={g.baseName}>{g.baseName}</option>
                       ))}
+                    </select>
+                    <select
+                      value={expForm.product_weight}
+                      onChange={(e) => {
+                        const w = e.target.value;
+                        const pid = resolveProductIdByBaseAndWeight(expGroups, expForm.product_base_name, w);
+                        setExpForm({ ...expForm, product_weight: w, product_id: pid });
+                      }}
+                      className="px-3 py-2 border rounded-xl text-sm bg-white"
+                    >
+                      <option value="">Gramatura (Todas)</option>
+                      {primaryWeights.length > 0 && (
+                        <optgroup label="Gramaturas do produto">
+                          {primaryWeights.map((w) => <option key={`sp-${w}`} value={w}>{w}</option>)}
+                        </optgroup>
+                      )}
+                      {otherWeights.length > 0 && (
+                        <optgroup label="Atribuir outra gramatura">
+                          {otherWeights.map((w) => <option key={`so-${w}`} value={w}>{w}</option>)}
+                        </optgroup>
+                      )}
                     </select>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-center">

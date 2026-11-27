@@ -126,7 +126,7 @@ async function applyAuditWatermark({
 
   await sharp(baseBuffer)
     .composite([{ input: svgOverlay, top: 0, left: 0 }])
-    .jpeg({ quality: 92, mozjpeg: true })
+    .jpeg({ quality: 96, chromaSubsampling: '4:4:4', mozjpeg: true })
     .toFile(watermarkedPath);
 
   return {
@@ -292,7 +292,7 @@ async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, pl
 
   await sharp(baseBuffer)
     .composite([{ input: svgOverlay, top: 0, left: 0 }])
-    .jpeg({ quality: 92, mozjpeg: true })
+    .jpeg({ quality: 96, chromaSubsampling: '4:4:4', mozjpeg: true })
     .toFile(annotatedPath);
 
   return {

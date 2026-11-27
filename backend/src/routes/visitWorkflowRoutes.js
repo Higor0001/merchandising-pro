@@ -624,9 +624,9 @@ router.get('/visits/:id/report', async (req, res, next) => {
     // Prioriza Selfie, Fotos Finais e Fotos Iniciais, ajustando compressão para caber 100% das fotos no PDF
     if (includeImages && gallery.length > 0) {
       const count = gallery.length;
-      const maxW = count <= 12 ? 760 : count <= 24 ? 580 : count <= 40 ? 460 : 380;
-      const qual = count <= 12 ? 78 : count <= 24 ? 70 : count <= 40 ? 62 : 55;
-      const MAX_TOTAL_BYTES = 3_400_000;
+      const maxW = count <= 12 ? 1280 : count <= 24 ? 960 : count <= 40 ? 680 : 520;
+      const qual = count <= 12 ? 88 : count <= 24 ? 80 : count <= 40 ? 72 : 66;
+      const MAX_TOTAL_BYTES = 4_200_000;
       let usedBytes = 0;
 
       const stagePriority = (s) => {

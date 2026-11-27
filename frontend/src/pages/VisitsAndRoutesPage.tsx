@@ -22,6 +22,11 @@ import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
 import { ProductSelectorWithSi5 } from '../components/ProductSelectorWithSi5';
 import { loadProductsWithDeviceCache, type CachedProduct } from '../services/productCatalogCache';
+import {
+  collectAvailableWeights,
+  groupProductsWithoutWeight,
+  resolveProductIdByBaseAndWeight,
+} from '../utils/productWeights';
 
 type DateFilterMode = 'hoje' | 'ontem' | '7dias' | 'mes' | 'data' | 'periodo' | 'todas';
 
@@ -77,7 +82,7 @@ export const VisitsAndRoutesPage: React.FC<{
   // Quick action states inside selected visit
   const [expBefore, setExpBefore] = useState<File | null>(null);
   const [expAfter, setExpAfter] = useState<File | null>(null);
-  const [expForm, setExpForm] = useState({ exposure_type: 'Gôndola', category: 'Todos', brand_id: '', product_id: '', facings_actual: '6', facings_expected: '6', notes: '' });
+  const [expForm, setExpForm] = useState({ exposure_type: 'Gôndola', category: 'Todos', brand_id: '', product_base_name: '', product_weight: '', product_id: '', facings_actual: '6', facings_expected: '6', notes: '' });
 
   const [pricePhoto, setPricePhoto] = useState<File | null>(null);
   const [priceForm, setPriceForm] = useState({ product_id: '', gondola_price: '', has_price_tag: true, notes: '' });
@@ -380,6 +385,7 @@ export const VisitsAndRoutesPage: React.FC<{
       fd.append('category', expForm.category);
       if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
       if (expForm.product_id) fd.append('product_id', expForm.product_id);
+      if (expForm.product_weight) fd.append('product_weight', expForm.product_weight);
       fd.append('facings_actual', expForm.facings_actual);
       fd.append('facings_expected', expForm.facings_expected);
       fd.append('notes', expForm.notes);
@@ -993,11 +999,15 @@ export const VisitsAndRoutesPage: React.FC<{
                     ? null
                     : new Set(products.filter((p: any) => (p.category || '') === expForm.category && p.brand_id).map((p: any) => Number(p.brand_id)));
                   const expBrands = validBrandIds ? brands.filter((b: any) => validBrandIds.has(Number(b.id))) : brands;
-                  const expProducts = products.filter((p: any) => {
+                  const expProductsRaw = products.filter((p: any) => {
                     if (expForm.category !== 'Todos' && (p.category || '') !== expForm.category) return false;
                     if (expForm.brand_id && Number(p.brand_id) !== Number(expForm.brand_id)) return false;
                     return true;
                   });
+                  const expGroups = groupProductsWithoutWeight(expProductsRaw as CachedProduct[]);
+                  const expSelectedGroup = expGroups.find((g) => g.baseName === expForm.product_base_name) || null;
+                  const primaryWeights = expSelectedGroup ? expSelectedGroup.weights : collectAvailableWeights(expProductsRaw as CachedProduct[]);
+                  const otherWeights = collectAvailableWeights(products as CachedProduct[]).filter((w) => !primaryWeights.includes(w));
                   return (
                   <form onSubmit={handleSubmitDisplay} className="space-y-2">
                     <select value={expForm.exposure_type} onChange={(e) => setExpForm({ ...expForm, exposure_type: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs bg-white">
@@ -1006,32 +1016,61 @@ export const VisitsAndRoutesPage: React.FC<{
                     <div className="grid grid-cols-2 gap-2">
                       <select
                         value={expForm.category}
-                        onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_id: '' })}
+                        onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_base_name: '', product_weight: '', product_id: '' })}
                         className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
                       >
                         {expCategories.map((c) => <option key={c} value={c}>{c === 'Todos' ? 'Todos (Categorias)' : c}</option>)}
                       </select>
                       <select
                         value={expForm.brand_id}
-                        onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_id: '' })}
+                        onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_base_name: '', product_weight: '', product_id: '' })}
                         className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
                       >
                         <option value="">Todos ({expBrands.length} marcas)</option>
                         {expBrands.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
                       </select>
                     </div>
-                    <select
-                      value={expForm.product_id}
-                      onChange={(e) => setExpForm({ ...expForm, product_id: e.target.value })}
-                      className="w-full px-2.5 py-1.5 border rounded-xl text-xs bg-white"
-                    >
-                      <option value="">Todos ({expProducts.length} itens)</option>
-                      {expProducts.map((p: any) => (
-                        <option key={p.id} value={p.id}>{p.name}{p.weight ? ` (${p.weight})` : ''}</option>
-                      ))}
-                    </select>
-                    <PhotoInput label="Foto ANTES" file={expBefore} onFileSelect={setExpBefore} />
-                    <PhotoInput label="Foto DEPOIS" file={expAfter} onFileSelect={setExpAfter} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={expForm.product_base_name}
+                        onChange={(e) => {
+                          const base = e.target.value;
+                          const grp = expGroups.find((g) => g.baseName === base);
+                          const autoW = grp && grp.weights.length === 1 ? grp.weights[0] : '';
+                          const pid = resolveProductIdByBaseAndWeight(expGroups, base, autoW);
+                          setExpForm({ ...expForm, product_base_name: base, product_weight: autoW, product_id: pid });
+                        }}
+                        className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
+                      >
+                        <option value="">Todos ({expGroups.length} itens)</option>
+                        {expGroups.map((g) => (
+                          <option key={g.baseName} value={g.baseName}>{g.baseName}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={expForm.product_weight}
+                        onChange={(e) => {
+                          const w = e.target.value;
+                          const pid = resolveProductIdByBaseAndWeight(expGroups, expForm.product_base_name, w);
+                          setExpForm({ ...expForm, product_weight: w, product_id: pid });
+                        }}
+                        className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
+                      >
+                        <option value="">Gramatura (Todas)</option>
+                        {primaryWeights.length > 0 && (
+                          <optgroup label="Gramaturas do produto">
+                            {primaryWeights.map((w) => <option key={`vp-${w}`} value={w}>{w}</option>)}
+                          </optgroup>
+                        )}
+                        {otherWeights.length > 0 && (
+                          <optgroup label="Atribuir outra gramatura">
+                            {otherWeights.map((w) => <option key={`vo-${w}`} value={w}>{w}</option>)}
+                          </optgroup>
+                        )}
+                      </select>
+                    </div>
+                    <PhotoInput label="Foto ANTES (HD)" file={expBefore} onFileSelect={setExpBefore} />
+                    <PhotoInput label="Foto DEPOIS (HD)" file={expAfter} onFileSelect={setExpAfter} />
                     <input placeholder="Observação..." value={expForm.notes} onChange={(e) => setExpForm({ ...expForm, notes: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">Salvar Exposição</button>
                   </form>

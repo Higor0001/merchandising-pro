@@ -26,6 +26,7 @@ import {
   Bot,
   Search,
   PackageSearch,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useOffline } from '../context/OfflineContext';
@@ -121,7 +122,7 @@ export const Layout: React.FC<LayoutProps> = ({
 }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, logout, loginDisabled, downloadCertificate } = useAuth();
   const { isOnline, pendingCount, failedCount, syncNow, retryFailed, clearFailed, syncing } = useOffline();
 
   const isManager = user?.role === 'admin' || user?.role === 'supervisor';
@@ -173,7 +174,7 @@ export const Layout: React.FC<LayoutProps> = ({
               {activeStoreContext ? 'Operação na Loja' : PAGE_TITLES[activePage]}
             </div>
             <div className="text-[11px] text-slate-400 truncate">
-              {user?.name} • {roleLabels[user?.role || 'promotor']}
+              {user?.title ? `${user.title}: ${user.name}` : user?.name} • {user?.city || roleLabels[user?.role || 'promotor']}
             </div>
           </div>
         </div>
@@ -240,22 +241,32 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
 
         {/* User Profile Pill */}
-        <div className="mx-3 mt-3 p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800/90 flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 text-white text-xs font-extrabold flex items-center justify-center shrink-0">
-            {initials || 'MP'}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-xs font-bold text-white truncate">{user?.name}</div>
-            <div className="text-[11px] text-slate-400 truncate">
-              {roleLabels[user?.role || 'promotor']} • {user?.region || 'Geral'}
+        <div className="mx-3 mt-3 p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800/90 space-y-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-600 to-blue-600 text-white text-xs font-extrabold flex items-center justify-center shrink-0">
+              {initials || 'MP'}
             </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-bold text-white truncate">
+                {user?.title ? `${user.title}: ${user.name}` : user?.name}
+              </div>
+              <div className="text-[11px] text-slate-400 truncate">
+                {user?.city || user?.region || roleLabels[user?.role || 'promotor']}
+              </div>
+            </div>
+            <span
+              className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                isOnline ? 'bg-emerald-400 shadow-xs shadow-emerald-400/70' : 'bg-red-400'
+              }`}
+              title={isOnline ? 'Conectado' : 'Offline'}
+            />
           </div>
-          <span
-            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-              isOnline ? 'bg-emerald-400 shadow-xs shadow-emerald-400/70' : 'bg-red-400'
-            }`}
-            title={isOnline ? 'Conectado' : 'Offline'}
-          />
+          {loginDisabled && (
+            <div className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-[10px] font-bold text-emerald-300 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Certificado Digital Provisório Ativo</span>
+            </div>
+          )}
         </div>
 
         {/* Grouped Navigation */}
@@ -309,14 +320,25 @@ export const Layout: React.FC<LayoutProps> = ({
               Sincronizar ({pendingCount} pendente{pendingCount > 1 ? 's' : ''})
             </button>
           )}
-          <button
-            type="button"
-            onClick={logout}
-            className="w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-red-600/90 text-slate-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition border border-slate-800"
-          >
-            <LogOut className="w-4 h-4" />
-            Sair da Conta
-          </button>
+          {loginDisabled ? (
+            <button
+              type="button"
+              onClick={downloadCertificate}
+              className="w-full py-2 px-3 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/35 text-emerald-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition border border-emerald-500/30"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              Baixar Certificado Digital
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-red-600/90 text-slate-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition border border-slate-800"
+            >
+              <LogOut className="w-4 h-4" />
+              Sair da Conta
+            </button>
+          )}
         </div>
       </aside>
 
