@@ -129,8 +129,9 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
   });
   const [expForm, setExpForm] = useState({
     exposure_type: 'Gôndola',
-    category: 'Snacks de milho',
+    category: 'Todos',
     brand_id: '',
+    product_id: '',
     facings_actual: '6',
     facings_expected: '6',
     planogram_compliant: true,
@@ -256,9 +257,6 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
         setRepForm((f) => ({ ...f, product_id: f.product_id || String(prods[0].id) }));
         setValForm((f) => ({ ...f, product_id: f.product_id || String(prods[0].id) }));
         setPriceForm((f) => ({ ...f, product_id: f.product_id || String(prods[0].id) }));
-      }
-      if (brs.length > 0) {
-        setExpForm((f) => ({ ...f, brand_id: f.brand_id || String(brs[0].id) }));
       }
 
       if (op.active_visit) {
@@ -547,6 +545,7 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
       fd.append('exposure_type', expForm.exposure_type);
       fd.append('category', expForm.category);
       if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
+      if (expForm.product_id) fd.append('product_id', expForm.product_id);
       fd.append('facings_actual', expForm.facings_actual);
       fd.append('facings_expected', expForm.facings_expected);
       fd.append('planogram_compliant', String(expForm.planogram_compliant));
@@ -1450,29 +1449,56 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                 </form>
               )}
 
-              {execTab === 'exposicao' && (
+              {execTab === 'exposicao' && (() => {
+                const expCategories = ['Todos', ...Array.from(new Set(products.map((p) => String(p.category || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))];
+                const validBrandIds = expForm.category === 'Todos'
+                  ? null
+                  : new Set(products.filter((p) => (p.category || '') === expForm.category && p.brand_id).map((p) => Number(p.brand_id)));
+                const expBrands = validBrandIds ? brands.filter((b) => validBrandIds.has(Number(b.id))) : brands;
+                const expProducts = products.filter((p) => {
+                  if (expForm.category !== 'Todos' && (p.category || '') !== expForm.category) return false;
+                  if (expForm.brand_id && Number(p.brand_id) !== Number(expForm.brand_id)) return false;
+                  return true;
+                });
+                return (
                 <form onSubmit={handleSaveExposure} className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                     <select
                       value={expForm.exposure_type}
                       onChange={(e) => setExpForm({ ...expForm, exposure_type: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm"
+                      className="px-3 py-2 border rounded-xl text-sm bg-white"
                     >
-                      {['Gôndola', 'Ponto Extra', 'Ilha Promocional', 'Display', 'Ponta de Gôndola', 'Checkout'].map((t) => <option key={t}>{t}</option>)}
+                      {['Gôndola', 'Corredor Principal', 'Ponta de Gôndola', 'Ilha Promocional', 'Ponto Extra', 'Display', 'Checkout'].map((t) => <option key={t}>{t}</option>)}
+                    </select>
+                    <select
+                      value={expForm.category}
+                      onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_id: '' })}
+                      className="px-3 py-2 border rounded-xl text-sm bg-white"
+                    >
+                      {expCategories.map((c) => (
+                        <option key={c} value={c}>{c === 'Todos' ? 'Todos (Categorias)' : c}</option>
+                      ))}
                     </select>
                     <select
                       value={expForm.brand_id}
-                      onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm"
+                      onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_id: '' })}
+                      className="px-3 py-2 border rounded-xl text-sm bg-white"
                     >
-                      {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      <option value="">Todos ({expBrands.length} marcas)</option>
+                      {expBrands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
-                    <input
-                      placeholder="Categoria"
-                      value={expForm.category}
-                      onChange={(e) => setExpForm({ ...expForm, category: e.target.value })}
-                      className="px-3 py-2 border rounded-xl text-sm"
-                    />
+                    <select
+                      value={expForm.product_id}
+                      onChange={(e) => setExpForm({ ...expForm, product_id: e.target.value })}
+                      className="px-3 py-2 border rounded-xl text-sm bg-white"
+                    >
+                      <option value="">Todos ({expProducts.length} itens)</option>
+                      {expProducts.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{p.weight && !p.name.toLowerCase().includes(p.weight.toLowerCase().replace(/\s+/g, '')) ? ` (${p.weight})` : ''}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-center">
                     <input
@@ -1509,7 +1535,8 @@ export const StoreOperationalPage: React.FC<StoreOperationalPageProps> = ({ stor
                     Registrar Organização / Ponto Extra
                   </button>
                 </form>
-              )}
+                );
+              })()}
 
               {execTab === 'validade' && (
                 <form onSubmit={handleSaveExpiry} className="space-y-3">

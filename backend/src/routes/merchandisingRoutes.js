@@ -211,21 +211,24 @@ router.get('/displays', async (req, res, next) => {
     if (store_id) filter.store_id = Number(store_id);
     if (exposure_type) filter.exposure_type = exposure_type;
 
-    const [rows, stores, brands, users] = await Promise.all([
+    const [rows, stores, brands, products, users] = await Promise.all([
       (await col('displays_exposures')).find(filter, { projection: { _id: 0 } }).sort({ id: -1 }).limit(100).toArray(),
       (await col('stores')).find({}).toArray(),
       (await col('brands')).find({}).toArray(),
+      (await col('products')).find({}, { projection: { _id: 0, id: 1, name: 1, weight: 1 } }).toArray(),
       (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
     ]);
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const brandMap = Object.fromEntries(brands.map((b) => [b.id, b.name]));
+    const prodMap = Object.fromEntries(products.map((p) => [p.id, p]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
 
     res.json(
       rows.map((d) => ({
         ...d,
         store_name: storeMap[d.store_id] || '-',
-        brand_name: brandMap[d.brand_id] || '',
+        brand_name: d.brand_id ? brandMap[d.brand_id] || '' : 'Todas',
+        product_name: d.product_id ? prodMap[d.product_id]?.name || '' : 'Todos',
         promoter_name: userMap[d.promoter_id] || '',
       }))
     );
@@ -240,7 +243,7 @@ router.post(
     let wmBeforePath = null;
     let wmAfterPath = null;
     try {
-      const { visit_id, store_id, category, brand_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
+      const { visit_id, store_id, category, brand_id, product_id, exposure_type, facings_actual, facings_expected, planogram_compliant, pos_materials, notes } = req.body || {};
       if (!store_id || !category || !exposure_type) {
         return res.status(400).json({ error: 'Loja, categoria e tipo de exposição são obrigatórios.' });
       }
@@ -306,6 +309,7 @@ router.post(
         promoter_id: req.user.id,
         category,
         brand_id: brand_id ? Number(brand_id) : null,
+        product_id: product_id ? Number(product_id) : null,
         exposure_type,
         facings_actual: Number(facings_actual || 0),
         facings_expected: Number(facings_expected || 0),

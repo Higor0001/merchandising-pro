@@ -77,7 +77,7 @@ export const VisitsAndRoutesPage: React.FC<{
   // Quick action states inside selected visit
   const [expBefore, setExpBefore] = useState<File | null>(null);
   const [expAfter, setExpAfter] = useState<File | null>(null);
-  const [expForm, setExpForm] = useState({ exposure_type: 'Gôndola', category: 'Salgadinhos', brand_id: '', facings_actual: '6', facings_expected: '6', notes: '' });
+  const [expForm, setExpForm] = useState({ exposure_type: 'Gôndola', category: 'Todos', brand_id: '', product_id: '', facings_actual: '6', facings_expected: '6', notes: '' });
 
   const [pricePhoto, setPricePhoto] = useState<File | null>(null);
   const [priceForm, setPriceForm] = useState({ product_id: '', gondola_price: '', has_price_tag: true, notes: '' });
@@ -157,7 +157,6 @@ export const VisitsAndRoutesPage: React.FC<{
       setCampaigns(c?.campaigns || []);
       if (Array.isArray(s) && s.length > 0) setNewVisit((prev) => ({ ...prev, store_id: prev.store_id || String(s[0].id) }));
       if (Array.isArray(p) && p.length > 0) setPriceForm((prev) => ({ ...prev, product_id: prev.product_id || String(p[0].id) }));
-      if (Array.isArray(b) && b.length > 0) setExpForm((prev) => ({ ...prev, brand_id: prev.brand_id || String(b[0].id) }));
       if ((c?.campaigns || []).length > 0) {
         setCampForm((prev) => ({ ...prev, campaign_id: prev.campaign_id || String(c.campaigns[0].id) }));
       }
@@ -380,6 +379,7 @@ export const VisitsAndRoutesPage: React.FC<{
       fd.append('exposure_type', expForm.exposure_type);
       fd.append('category', expForm.category);
       if (expForm.brand_id) fd.append('brand_id', expForm.brand_id);
+      if (expForm.product_id) fd.append('product_id', expForm.product_id);
       fd.append('facings_actual', expForm.facings_actual);
       fd.append('facings_expected', expForm.facings_expected);
       fd.append('notes', expForm.notes);
@@ -987,23 +987,56 @@ export const VisitsAndRoutesPage: React.FC<{
                   </div>
                 )}
 
-                {activeActionTab === 'exposicao' && (
+                {activeActionTab === 'exposicao' && (() => {
+                  const expCategories = ['Todos', ...Array.from(new Set(products.map((p: any) => String(p.category || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))];
+                  const validBrandIds = expForm.category === 'Todos'
+                    ? null
+                    : new Set(products.filter((p: any) => (p.category || '') === expForm.category && p.brand_id).map((p: any) => Number(p.brand_id)));
+                  const expBrands = validBrandIds ? brands.filter((b: any) => validBrandIds.has(Number(b.id))) : brands;
+                  const expProducts = products.filter((p: any) => {
+                    if (expForm.category !== 'Todos' && (p.category || '') !== expForm.category) return false;
+                    if (expForm.brand_id && Number(p.brand_id) !== Number(expForm.brand_id)) return false;
+                    return true;
+                  });
+                  return (
                   <form onSubmit={handleSubmitDisplay} className="space-y-2">
+                    <select value={expForm.exposure_type} onChange={(e) => setExpForm({ ...expForm, exposure_type: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs bg-white">
+                      {['Gôndola', 'Corredor Principal', 'Ponta de Gôndola', 'Ilha Promocional', 'Ponto Extra', 'Display', 'Checkout'].map((t) => <option key={t}>{t}</option>)}
+                    </select>
                     <div className="grid grid-cols-2 gap-2">
-                      <select value={expForm.exposure_type} onChange={(e) => setExpForm({ ...expForm, exposure_type: e.target.value })} className="px-2.5 py-1.5 border rounded-xl text-xs">
-                        {['Gôndola', 'Ponto Extra', 'Ilha Promocional', 'Display', 'Ponta de Gôndola', 'Checkout'].map((t) => <option key={t}>{t}</option>)}
+                      <select
+                        value={expForm.category}
+                        onChange={(e) => setExpForm({ ...expForm, category: e.target.value, brand_id: '', product_id: '' })}
+                        className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
+                      >
+                        {expCategories.map((c) => <option key={c} value={c}>{c === 'Todos' ? 'Todos (Categorias)' : c}</option>)}
                       </select>
-                      <select value={expForm.brand_id} onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value })} className="px-2.5 py-1.5 border rounded-xl text-xs">
-                        {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      <select
+                        value={expForm.brand_id}
+                        onChange={(e) => setExpForm({ ...expForm, brand_id: e.target.value, product_id: '' })}
+                        className="px-2.5 py-1.5 border rounded-xl text-xs bg-white"
+                      >
+                        <option value="">Todos ({expBrands.length} marcas)</option>
+                        {expBrands.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
                       </select>
                     </div>
-                    <input placeholder="Categoria (ex: Salgadinhos)" value={expForm.category} onChange={(e) => setExpForm({ ...expForm, category: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
+                    <select
+                      value={expForm.product_id}
+                      onChange={(e) => setExpForm({ ...expForm, product_id: e.target.value })}
+                      className="w-full px-2.5 py-1.5 border rounded-xl text-xs bg-white"
+                    >
+                      <option value="">Todos ({expProducts.length} itens)</option>
+                      {expProducts.map((p: any) => (
+                        <option key={p.id} value={p.id}>{p.name}{p.weight ? ` (${p.weight})` : ''}</option>
+                      ))}
+                    </select>
                     <PhotoInput label="Foto ANTES" file={expBefore} onFileSelect={setExpBefore} />
                     <PhotoInput label="Foto DEPOIS" file={expAfter} onFileSelect={setExpAfter} />
                     <input placeholder="Observação..." value={expForm.notes} onChange={(e) => setExpForm({ ...expForm, notes: e.target.value })} className="w-full px-2.5 py-1.5 border rounded-xl text-xs" />
                     <button type="submit" className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl">Salvar Exposição</button>
                   </form>
-                )}
+                  );
+                })()}
 
                 {activeActionTab === 'preco' && (
                   <form onSubmit={handleSubmitPrice} className="space-y-2">

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layers, Grid3X3, Sparkles } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { useToast } from '../context/ToastContext';
@@ -8,7 +8,10 @@ import { loadProductsWithDeviceCache, type CachedProduct } from '../services/pro
 export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-extras' | 'planogramas' }> = ({ mode }) => {
   const { toast } = useToast();
   const [displays, setDisplays] = useState<any[]>([]);
-  const [planograms, setPlanograms] = useState<{ rows: any[]; indicators: any }>({ rows: [], indicators: { byBrand: [], byCategory: [], byStore: [] } });
+  const [planograms, setPlanograms] = useState<{ rows: any[]; indicators: any }>({
+    rows: [],
+    indicators: { byBrand: [], byCategory: [], byStore: [] },
+  });
   const [stores, setStores] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
   const [products, setProducts] = useState<CachedProduct[]>([]);
@@ -17,8 +20,9 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
   const [photoAfter, setPhotoAfter] = useState<File | null>(null);
   const [displayForm, setDisplayForm] = useState({
     store_id: '',
-    category: 'Salgadinhos',
+    category: 'Todos',
     brand_id: '',
+    product_id: '',
     exposure_type: mode === 'pontos-extras' ? 'Ponto Extra' : 'Gôndola',
     facings_actual: '6',
     facings_expected: '6',
@@ -29,7 +33,7 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
 
   const [planForm, setPlanForm] = useState({
     store_id: '',
-    category: 'Salgadinhos',
+    category: 'Todos',
     brand_id: '',
     product_id: '',
     ideal_facings: '6',
@@ -40,42 +44,94 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
     notes: '',
   });
 
-  const load = async () => {
-    const [d, pl, s, b, pr] = await Promise.all([
-      apiFetch('/displays'),
-      apiFetch('/planograms'),
-      apiFetch('/stores'),
-      apiFetch('/brands'),
-      loadProductsWithDeviceCache(false),
-    ]);
-    setDisplays(d);
-    setPlanograms(pl);
-    setStores(s);
-    setBrands(b);
-    setProducts(pr);
-    if (s.length) {
-      setDisplayForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
-      setPlanForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
+  const load = useCallback(async () => {
+    try {
+      const [d, pl, s, b, pr] = await Promise.all([
+        apiFetch('/displays'),
+        apiFetch('/planograms'),
+        apiFetch('/stores'),
+        apiFetch('/brands'),
+        loadProductsWithDeviceCache(false),
+      ]);
+      setDisplays(Array.isArray(d) ? d : []);
+      setPlanograms(pl || { rows: [], indicators: { byBrand: [], byCategory: [], byStore: [] } });
+      setStores(Array.isArray(s) ? s : []);
+      setBrands(Array.isArray(b) ? b : []);
+      setProducts(Array.isArray(pr) ? pr : []);
+      if (Array.isArray(s) && s.length) {
+        setDisplayForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
+        setPlanForm((f) => ({ ...f, store_id: f.store_id || String(s[0].id) }));
+      }
+    } catch (err: any) {
+      toast('err', err.message || 'Erro ao carregar exposições e planogramas.');
     }
-    if (b.length) {
-      setDisplayForm((f) => ({ ...f, brand_id: f.brand_id || String(b[0].id) }));
-      setPlanForm((f) => ({ ...f, brand_id: f.brand_id || String(b[0].id) }));
-    }
-    if (pr.length) {
-      setPlanForm((f) => ({ ...f, product_id: f.product_id || String(pr[0].id) }));
-    }
-  };
+  }, [toast]);
 
   useEffect(() => {
     setDisplayForm((f) => ({ ...f, exposure_type: mode === 'pontos-extras' ? 'Ponto Extra' : 'Gôndola' }));
-    load();
-  }, [mode]);
+    void load();
+  }, [mode, load]);
+
+  // Todas as categorias reais do catálogo (sempre com "Todos" no topo)
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of products) {
+      const c = String(p.category || '').trim();
+      if (c) set.add(c);
+    }
+    return ['Todos', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [products]);
+
+  // Filtra marcas pertencentes à categoria escolhida
+  const getBrandsForCategory = useCallback(
+    (category: string) => {
+      if (!category || category === 'Todos') return brands;
+      const validBrandIds = new Set(
+        products.filter((p) => (p.category || '') === category && p.brand_id).map((p) => Number(p.brand_id))
+      );
+      return brands.filter((b) => validBrandIds.has(Number(b.id)));
+    },
+    [brands, products]
+  );
+
+  // Filtra produtos pertencentes à categoria + marca escolhidas
+  const getProductsForSelection = useCallback(
+    (category: string, brandId: string) => {
+      return products.filter((p) => {
+        if (category && category !== 'Todos' && (p.category || '') !== category) return false;
+        if (brandId && Number(p.brand_id) !== Number(brandId)) return false;
+        return true;
+      });
+    },
+    [products]
+  );
+
+  const displayBrands = useMemo(
+    () => getBrandsForCategory(displayForm.category),
+    [getBrandsForCategory, displayForm.category]
+  );
+  const displayProducts = useMemo(
+    () => getProductsForSelection(displayForm.category, displayForm.brand_id),
+    [getProductsForSelection, displayForm.category, displayForm.brand_id]
+  );
+
+  const planBrands = useMemo(
+    () => getBrandsForCategory(planForm.category),
+    [getBrandsForCategory, planForm.category]
+  );
+  const planProducts = useMemo(
+    () => getProductsForSelection(planForm.category, planForm.brand_id),
+    [getProductsForSelection, planForm.category, planForm.brand_id]
+  );
 
   const submitDisplay = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const fd = new FormData();
-      Object.entries(displayForm).forEach(([k, v]) => fd.append(k, String(v)));
+      Object.entries(displayForm).forEach(([k, v]) => {
+        if ((k === 'brand_id' || k === 'product_id') && !v) return;
+        fd.append(k, String(v));
+      });
       if (photoBefore) fd.append('photo_before', photoBefore);
       if (photoAfter) fd.append('photo_after', photoAfter);
       const res = await apiFetch<any>('/displays', { method: 'POST', body: fd });
@@ -97,8 +153,8 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
         body: JSON.stringify({
           ...planForm,
           store_id: Number(planForm.store_id),
-          brand_id: Number(planForm.brand_id),
-          product_id: Number(planForm.product_id),
+          brand_id: planForm.brand_id ? Number(planForm.brand_id) : null,
+          product_id: planForm.product_id ? Number(planForm.product_id) : null,
           ideal_facings: Number(planForm.ideal_facings),
           actual_facings: Number(planForm.actual_facings),
           total_category_facings: Number(planForm.total_category_facings),
@@ -116,7 +172,7 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-xl font-extrabold text-slate-900">Planogramas & Share of Shelf</h1>
+          <h1 className="font-display text-xl font-extrabold text-slate-900">Planogramas & Share of Shelf</h1>
           <p className="text-sm text-slate-500">Avaliação de frentes, espaços perdidos, comparação com concorrentes e participação na gôndola</p>
         </div>
 
@@ -151,40 +207,77 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
           </div>
         </div>
 
-        <form onSubmit={submitPlanogram} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
+        <form onSubmit={submitPlanogram} className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3 shadow-xs">
           <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
             <Grid3X3 className="w-4 h-4 text-blue-600" /> Auditar Planograma & Share of Shelf
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-            <select value={planForm.store_id} onChange={(e) => setPlanForm({ ...planForm, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-              {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <select value={planForm.brand_id} onChange={(e) => setPlanForm({ ...planForm, brand_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-            <select value={planForm.product_id} onChange={(e) => setPlanForm({ ...planForm, product_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-              {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <input placeholder="Categoria" value={planForm.category} onChange={(e) => setPlanForm({ ...planForm, category: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
-            <select value={planForm.position_level} onChange={(e) => setPlanForm({ ...planForm, position_level: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-              {['Olhos', 'Mãos', 'Superior', 'Inferior'].map((p) => <option key={p}>{p}</option>)}
-            </select>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500">Loja</label>
+              <select value={planForm.store_id} onChange={(e) => setPlanForm({ ...planForm, store_id: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white">
+                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500">Categoria</label>
+              <select
+                value={planForm.category}
+                onChange={(e) => setPlanForm({ ...planForm, category: e.target.value, brand_id: '', product_id: '' })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c === 'Todos' ? 'Todos (Todas as Categorias)' : c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500">Marca</label>
+              <select
+                value={planForm.brand_id}
+                onChange={(e) => setPlanForm({ ...planForm, brand_id: e.target.value, product_id: '' })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="">Todos ({planBrands.length} marca{planBrands.length !== 1 ? 's' : ''})</option>
+                {planBrands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500">Item / Produto</label>
+              <select
+                value={planForm.product_id}
+                onChange={(e) => setPlanForm({ ...planForm, product_id: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+              >
+                <option value="">Todos ({planProducts.length} ite{planProducts.length !== 1 ? 'ns' : 'm'})</option>
+                {planProducts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.weight && !p.name.toLowerCase().includes(p.weight.toLowerCase().replace(/\s+/g, '')) ? ` (${p.weight})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500">Nível</label>
+              <select value={planForm.position_level} onChange={(e) => setPlanForm({ ...planForm, position_level: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white">
+                {['Olhos', 'Mãos', 'Superior', 'Inferior'].map((p) => <option key={p}>{p}</option>)}
+              </select>
+            </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div><label className="text-xs text-slate-500">Frentes Ideais</label><input type="number" value={planForm.ideal_facings} onChange={(e) => setPlanForm({ ...planForm, ideal_facings: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
-            <div><label className="text-xs text-slate-500">Frentes Reais</label><input type="number" value={planForm.actual_facings} onChange={(e) => setPlanForm({ ...planForm, actual_facings: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
-            <div><label className="text-xs text-slate-500">Total Frentes Categ.</label><input type="number" value={planForm.total_category_facings} onChange={(e) => setPlanForm({ ...planForm, total_category_facings: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
-            <div><label className="text-xs text-slate-500">Frentes Concorrente</label><input type="number" value={planForm.competitor_facings} onChange={(e) => setPlanForm({ ...planForm, competitor_facings: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
+            <div><label className="text-xs text-slate-500">Frentes Ideais</label><input type="number" value={planForm.ideal_facings} onChange={(e) => setPlanForm({ ...planForm, ideal_facings: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
+            <div><label className="text-xs text-slate-500">Frentes Reais</label><input type="number" value={planForm.actual_facings} onChange={(e) => setPlanForm({ ...planForm, actual_facings: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
+            <div><label className="text-xs text-slate-500">Total Frentes Categ.</label><input type="number" value={planForm.total_category_facings} onChange={(e) => setPlanForm({ ...planForm, total_category_facings: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
+            <div><label className="text-xs text-slate-500">Frentes Concorrente</label><input type="number" value={planForm.competitor_facings} onChange={(e) => setPlanForm({ ...planForm, competitor_facings: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
           </div>
-          <button type="submit" className="px-5 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl">Calcular & Registrar Auditoria</button>
+          <button type="submit" className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl">Calcular & Registrar Auditoria</button>
         </form>
 
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
+        <div className="bg-white rounded-3xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 border-b">
               <tr>
                 <th className="px-4 py-3">Loja</th>
-                <th className="px-4 py-3">Categoria / Marca</th>
+                <th className="px-4 py-3">Categoria / Marca / Item</th>
                 <th className="px-4 py-3">Posição</th>
                 <th className="px-4 py-3">Frentes (Real/Ideal)</th>
                 <th className="px-4 py-3">Espaços Perdidos</th>
@@ -195,7 +288,10 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
               {planograms.rows.map((r) => (
                 <tr key={r.id}>
                   <td className="px-4 py-3 font-medium">{r.store_name}</td>
-                  <td className="px-4 py-3">{r.category} • {r.brand_name}</td>
+                  <td className="px-4 py-3">
+                    {r.category} • {r.brand_name !== '-' ? r.brand_name : 'Todas'}
+                    {r.product_name && r.product_name !== '-' ? ` • ${r.product_name}` : ''}
+                  </td>
                   <td className="px-4 py-3">{r.position_level}</td>
                   <td className="px-4 py-3 font-bold">{r.actual_facings} / {r.ideal_facings}</td>
                   <td className="px-4 py-3 text-red-600 font-bold">{r.lost_spaces}</td>
@@ -216,34 +312,109 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-extrabold text-slate-900">
+        <h1 className="font-display text-xl font-extrabold text-slate-900">
           {mode === 'pontos-extras' ? 'Pontos Extras, Ilhas, Displays & Checkouts' : 'Organização e Exposição de Gôndolas'}
         </h1>
         <p className="text-sm text-slate-500">Padronização visual, controle de frentes, materiais de merchandising e fotos antes/depois</p>
       </div>
 
-      <form onSubmit={submitDisplay} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4">
+      <form onSubmit={submitDisplay} className="bg-white p-5 rounded-3xl border border-slate-200 space-y-4 shadow-xs">
         <div className="font-bold text-sm text-slate-800 flex items-center gap-2">
           {mode === 'pontos-extras' ? <Sparkles className="w-4 h-4 text-purple-600" /> : <Layers className="w-4 h-4 text-blue-600" />}
           Registrar Execução Visual (Antes e Depois)
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <select value={displayForm.store_id} onChange={(e) => setDisplayForm({ ...displayForm, store_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={displayForm.exposure_type} onChange={(e) => setDisplayForm({ ...displayForm, exposure_type: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {['Gôndola', 'Ponto Extra', 'Ilha Promocional', 'Display', 'Ponta de Gôndola', 'Checkout'].map((t) => <option key={t}>{t}</option>)}
-          </select>
-          <input placeholder="Categoria" value={displayForm.category} onChange={(e) => setDisplayForm({ ...displayForm, category: e.target.value })} className="px-3 py-2 border rounded-xl text-sm" />
-          <select value={displayForm.brand_id} onChange={(e) => setDisplayForm({ ...displayForm, brand_id: e.target.value })} className="px-3 py-2 border rounded-xl text-sm">
-            {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
+
+        {/* Loja + Tipo de Exposição */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] font-bold text-slate-500">Loja / PDV</label>
+            <select
+              value={displayForm.store_id}
+              onChange={(e) => setDisplayForm({ ...displayForm, store_id: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+            >
+              {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] font-bold text-slate-500">Tipo de Exposição</label>
+            <select
+              value={displayForm.exposure_type}
+              onChange={(e) => setDisplayForm({ ...displayForm, exposure_type: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white"
+            >
+              {['Gôndola', 'Corredor Principal', 'Ponta de Gôndola', 'Ilha Promocional', 'Ponto Extra', 'Display', 'Checkout'].map((t) => (
+                <option key={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Seleção em Cascata: Categoria -> Marca (Todos) -> Item/Produto (Todos) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-2xl bg-slate-50/80 border border-slate-200/80">
+          <div>
+            <label className="text-[11px] font-bold text-slate-600">1. Categoria</label>
+            <select
+              value={displayForm.category}
+              onChange={(e) =>
+                setDisplayForm({
+                  ...displayForm,
+                  category: e.target.value,
+                  brand_id: '',
+                  product_id: '',
+                })
+              }
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white font-semibold"
+            >
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat === 'Todos' ? 'Todos (Todas as Categorias)' : cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-bold text-slate-600">2. Marca da Categoria</label>
+            <select
+              value={displayForm.brand_id}
+              onChange={(e) =>
+                setDisplayForm({
+                  ...displayForm,
+                  brand_id: e.target.value,
+                  product_id: '',
+                })
+              }
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white font-semibold"
+            >
+              <option value="">Todos ({displayBrands.length} marca{displayBrands.length !== 1 ? 's' : ''})</option>
+              {displayBrands.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-bold text-slate-600">3. Item / Produto</label>
+            <select
+              value={displayForm.product_id}
+              onChange={(e) => setDisplayForm({ ...displayForm, product_id: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white font-semibold"
+            >
+              <option value="">Todos ({displayProducts.length} ite{displayProducts.length !== 1 ? 'ns' : 'm'})</option>
+              {displayProducts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.weight && !p.name.toLowerCase().includes(p.weight.toLowerCase().replace(/\s+/g, '')) ? ` (${p.weight})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div><label className="text-xs text-slate-500">Frentes Reais</label><input type="number" value={displayForm.facings_actual} onChange={(e) => setDisplayForm({ ...displayForm, facings_actual: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
-          <div><label className="text-xs text-slate-500">Frentes Esperadas</label><input type="number" value={displayForm.facings_expected} onChange={(e) => setDisplayForm({ ...displayForm, facings_expected: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
-          <div><label className="text-xs text-slate-500">Materiais de PDV</label><input value={displayForm.pos_materials} onChange={(e) => setDisplayForm({ ...displayForm, pos_materials: e.target.value })} className="w-full px-3 py-2 border rounded-xl text-sm" /></div>
+          <div><label className="text-xs text-slate-500">Frentes Reais</label><input type="number" value={displayForm.facings_actual} onChange={(e) => setDisplayForm({ ...displayForm, facings_actual: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
+          <div><label className="text-xs text-slate-500">Frentes Esperadas</label><input type="number" value={displayForm.facings_expected} onChange={(e) => setDisplayForm({ ...displayForm, facings_expected: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
+          <div><label className="text-xs text-slate-500">Materiais de PDV</label><input value={displayForm.pos_materials} onChange={(e) => setDisplayForm({ ...displayForm, pos_materials: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" /></div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -256,19 +427,23 @@ export const DisplayAndPlanogramPage: React.FC<{ mode: 'exposicao' | 'pontos-ext
             <input type="checkbox" checked={displayForm.planogram_compliant} onChange={(e) => setDisplayForm({ ...displayForm, planogram_compliant: e.target.checked })} className="w-4 h-4 accent-blue-600" />
             Execução dentro do padrão esperado
           </label>
-          <button type="submit" className="px-5 py-2 bg-blue-600 text-white text-sm font-bold rounded-xl">Salvar Exposição</button>
+          <button type="submit" className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl">Salvar Exposição</button>
         </div>
       </form>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filteredDisplays.map((d) => (
-          <div key={d.id} className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2">
-            <div className="flex justify-between items-start">
+          <div key={d.id} className="bg-white p-4 rounded-3xl border border-slate-200 space-y-2 shadow-xs">
+            <div className="flex justify-between items-start gap-2">
               <div>
                 <div className="font-bold text-slate-900">{d.exposure_type} — {d.store_name}</div>
-                <div className="text-xs text-slate-500">{d.category} • {d.brand_name} • Materiais: {d.pos_materials || '-'}</div>
+                <div className="text-xs text-slate-500">
+                  {d.category} › {d.brand_name || 'Todas'}
+                  {d.product_name && d.product_name !== 'Todos' ? ` › ${d.product_name}` : ' › Todos'}
+                  {d.pos_materials ? ` • Materiais: ${d.pos_materials}` : ''}
+                </div>
               </div>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${d.planogram_compliant ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold shrink-0 ${d.planogram_compliant ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                 {d.facings_actual}/{d.facings_expected} frentes
               </span>
             </div>
