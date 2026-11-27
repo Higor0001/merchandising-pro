@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Store, Plus, History, Bot, X, ArrowRight, Search, MapPin, Phone, FileText, FileSpreadsheet } from 'lucide-react';
-import { apiFetch } from '../services/api';
+import { apiFetch, readCachedApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
@@ -50,14 +50,21 @@ export const StoresPage: React.FC<{ onOpenStore?: (storeId: number) => void }> =
     }
   };
 
-  const load = useCallback(() => {
-    void apiFetch<any[]>('/stores')
-      .then((list) => setStores(Array.isArray(list) ? list : []))
-      .catch((err: any) => toast('err', err.message || 'Erro ao carregar lojas.'));
+  const load = useCallback(async () => {
+    const cached = await readCachedApi<any[]>('/stores');
+    if (Array.isArray(cached) && cached.length > 0) {
+      setStores(cached);
+    }
+    try {
+      const list = await apiFetch<any[]>('/stores');
+      setStores(Array.isArray(list) ? list : []);
+    } catch (err: any) {
+      if (!cached) toast('err', err.message || 'Erro ao carregar lojas.');
+    }
   }, [toast]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const filteredStores = useMemo(() => {

@@ -1,8 +1,13 @@
 const express = require('express');
 const fs = require('node:fs');
 const path = require('node:path');
-const sharp = require('sharp');
 const { col, nextId, nowStr, getGridFSBucket } = require('../db/database');
+
+let _sharp = null;
+function getSharp() {
+  if (!_sharp) _sharp = require('sharp');
+  return _sharp;
+}
 const { createDefaultChecklist } = require('../db/seed');
 const { authenticate, logAudit } = require('../middleware/auth');
 const { upload, uploadDir, saveFileToGridFS, cleanupUploadedFile } = require('../middleware/upload');
@@ -132,8 +137,29 @@ router.get('/stores/overview', async (_req, res, next) => {
     const [stores, routes, visits, occurrences, users] = await Promise.all([
       (await col('stores')).find({ active: { $ne: 0 } }, { projection: { _id: 0 } }).sort({ name: 1 }).toArray(),
       (await col('routes')).find({}, { projection: { _id: 0 } }).toArray(),
-      (await col('visits')).find({}, { projection: { _id: 0 } }).sort({ id: -1 }).toArray(),
-      (await col('occurrences')).find({ status: { $ne: 'Resolvida' } }, { projection: { _id: 0 } }).toArray(),
+      (await col('visits'))
+        .find(
+          {},
+          {
+            projection: {
+              _id: 0,
+              id: 1,
+              store_id: 1,
+              promoter_id: 1,
+              status: 1,
+              scheduled_date: 1,
+              scheduled_time: 1,
+              checkin_at: 1,
+              checkout_at: 1,
+              workflow_stage: 1,
+            },
+          }
+        )
+        .sort({ id: -1 })
+        .toArray(),
+      (await col('occurrences'))
+        .find({ status: { $ne: 'Resolvida' } }, { projection: { _id: 0, store_id: 1, priority: 1 } })
+        .toArray(),
       (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
     ]);
 
@@ -425,6 +451,7 @@ async function embedPhotoAsDataUrl(photoUrl, maxWidth = 760, quality = 76) {
   const raw = await loadPhotoBufferForPdf(photoUrl);
   if (!raw || raw.length === 0) return null;
   try {
+    const sharp = getSharp();
     const pipeline = sharp(raw).rotate();
     const meta = await pipeline.metadata();
     const isPano = Number(meta.width) > 0 && Number(meta.height) > 0 && meta.width / meta.height >= 2.0;

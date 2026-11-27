@@ -1,9 +1,14 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const sharp = require('sharp');
 const { col } = require('../db/database');
 const { detectPanoramic, normalizeAnnotations, renderAnnotatedImage } = require('./imageAnnotator');
+
+let _sharp = null;
+function getSharp() {
+  if (!_sharp) _sharp = require('sharp');
+  return _sharp;
+}
 
 const DEFAULT_GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
@@ -13,6 +18,7 @@ const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
  * garantindo que as coordenadas box_2d batam 100% com a imagem HD rotacionada no anotador.
  */
 async function prepareImageForVision(imagePath, maxDim = 1536, quality = 85) {
+  const sharp = getSharp();
   const buffer = await sharp(imagePath)
     .rotate()
     .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true })
@@ -328,6 +334,7 @@ async function analyzeShelfImage({ storeId, imagePath, notes }) {
 
   if (imagePath && fs.existsSync(imagePath)) {
     try {
+      const sharp = getSharp();
       const rotatedBuf = await sharp(imagePath).rotate().toBuffer();
       const meta = await sharp(rotatedBuf).metadata();
       isPanoramic = detectPanoramic(meta.width, meta.height);

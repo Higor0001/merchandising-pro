@@ -5,8 +5,8 @@ import { ToastProvider } from './context/ToastContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout, MENU_ITEMS, type MenuId } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
+import { DashboardPage } from './pages/DashboardPage';
 
-const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
 const VisitsAndRoutesPage = lazy(() =>
   import('./pages/VisitsAndRoutesPage').then((m) => ({ default: m.VisitsAndRoutesPage }))
 );

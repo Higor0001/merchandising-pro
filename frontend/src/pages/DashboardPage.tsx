@@ -19,7 +19,7 @@ import {
   Bell,
   FileText,
 } from 'lucide-react';
-import { apiFetch } from '../services/api';
+import { apiFetch, readCachedApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import type { MenuId } from '../components/Layout';
@@ -63,22 +63,36 @@ export const DashboardPage: React.FC<{
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const load = useCallback(() => {
-    setLoading(true);
+  const load = useCallback(async () => {
     setError('');
-    Promise.all([apiFetch('/dashboard'), apiFetch('/stores/overview')])
-      .then(([dash, ov]) => {
-        setData(dash);
-        setStoreOverview(ov);
-      })
-      .catch((err: any) => {
+    // Stale-While-Revalidate: exibe snapshot em cache instantaneamente (<10ms) enquanto atualiza em segundo plano
+    const [cachedDash, cachedOv] = await Promise.all([
+      readCachedApi('/dashboard'),
+      readCachedApi('/stores/overview'),
+    ]);
+    if (cachedDash && cachedOv) {
+      setData(cachedDash);
+      setStoreOverview(cachedOv);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      const [dash, ov] = await Promise.all([apiFetch('/dashboard'), apiFetch('/stores/overview')]);
+      setData(dash);
+      setStoreOverview(ov);
+    } catch (err: any) {
+      if (!cachedDash) {
         setError(err.message || 'Erro ao carregar indicadores do painel.');
-      })
-      .finally(() => setLoading(false));
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const storeList: any[] = useMemo(() => storeOverview?.stores || [], [storeOverview]);

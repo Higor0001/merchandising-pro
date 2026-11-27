@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { apiFetch } from '../services/api';
+import { apiFetch, clearMemoryApiCache } from '../services/api';
 import { clearAuthCaches } from '../services/offlineDb';
 
 export interface User {
@@ -75,6 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     localStorage.removeItem('merchpro_token');
     localStorage.removeItem('merchpro_user');
+    clearMemoryApiCache();
     void clearAuthCaches();
     setUser(null);
   };

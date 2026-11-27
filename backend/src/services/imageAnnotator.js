@@ -1,6 +1,11 @@
 const path = require('node:path');
 const fs = require('node:fs');
-const sharp = require('sharp');
+
+let _sharp = null;
+function getSharp() {
+  if (!_sharp) _sharp = require('sharp');
+  return _sharp;
+}
 
 const CATEGORY_STYLE = {
   rupture: { color: '#ef4444', label: 'Ruptura' },
@@ -71,6 +76,7 @@ async function applyAuditWatermark({
 }) {
   if (!imagePath || !fs.existsSync(imagePath)) return null;
 
+  const sharp = getSharp();
   const baseBuffer = await sharp(imagePath).rotate().toBuffer();
   const meta = await sharp(baseBuffer).metadata();
   const width = meta.width || 1280;
@@ -202,6 +208,7 @@ function normalizeAnnotations(rawList) {
 async function renderAnnotatedImage({ imagePath, annotations = [], outputDir, planogramScore, storeName, area, capturedAt }) {
   if (!imagePath || !fs.existsSync(imagePath)) return null;
 
+  const sharp = getSharp();
   const baseBuffer = await sharp(imagePath).rotate().toBuffer();
   const meta = await sharp(baseBuffer).metadata();
   const width = meta.width || 1280;

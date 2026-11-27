@@ -1,5 +1,12 @@
 const { col, nextId, nowStr } = require('./database');
-const pepsicoCatalog = require('./pepsico_catalog_si5.json');
+
+let cachedCatalog = null;
+function getPepsicoCatalog() {
+  if (!cachedCatalog) {
+    cachedCatalog = require('./pepsico_catalog_si5.json');
+  }
+  return cachedCatalog;
+}
 
 let migrationPromise = null;
 
@@ -86,7 +93,9 @@ async function runIncrementalMigrations() {
 
     // 3. Substituir catálogo antigo pelos itens limpos da planilha SI5 (executado uma única vez)
     const alreadyReplaced = doneSet.has('migration_pepsico_si5_clean_v1');
-    if (!alreadyReplaced && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+    if (!alreadyReplaced) {
+      const pepsicoCatalog = getPepsicoCatalog();
+      if (Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
       const productsCol = await col('products');
       const brandsCol = await col('brands');
 
@@ -133,11 +142,14 @@ async function runIncrementalMigrations() {
         await productsCol.insertMany(docs);
       }
       await countersCol.insertOne({ _id: 'migration_pepsico_si5_clean_v1', seq: docs.length, migrated_at: createdAt });
+      }
     }
 
     // 4. Atualização do catálogo PepsiCo v2 em lote (bulkWrite < 1s): padroniza marcas/categorias, preenche gramaturas e adiciona novos SKUs recentes preservando IDs existentes
     const alreadyUpdatedV2 = doneSet.has('migration_pepsico_catalog_v2');
-    if (!alreadyUpdatedV2 && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+    if (!alreadyUpdatedV2) {
+      const pepsicoCatalog = getPepsicoCatalog();
+      if (Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
       const productsCol = await col('products');
       const brandsCol = await col('brands');
       const migratedAt = nowStr();
@@ -279,11 +291,14 @@ async function runIncrementalMigrations() {
         { $set: { seq: bulkOps.length, migrated_at: migratedAt } },
         { upsert: true }
       );
+      }
     }
 
     // 5. Remoção de produtos repetidos / kits / DUN-14 duplicados no MongoDB em lote (< 0.5s), preservando IDs dos itens canônicos
     const alreadyDedupedV3 = doneSet.has('migration_dedup_pepsico_v3');
-    if (!alreadyDedupedV3 && Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
+    if (!alreadyDedupedV3) {
+      const pepsicoCatalog = getPepsicoCatalog();
+      if (Array.isArray(pepsicoCatalog) && pepsicoCatalog.length > 0) {
       const productsCol = await col('products');
       const migratedAt = nowStr();
       const canonicalByEan = new Map(pepsicoCatalog.map((item) => [String(item.ean || '').trim(), item]));
@@ -368,6 +383,7 @@ async function runIncrementalMigrations() {
         { $set: { seq: deactivatedCount, migrated_at: migratedAt } },
         { upsert: true }
       );
+      }
     }
 
     // 6. Limpeza pontual do histórico operacional e fotos APENAS no site/MongoDB (mantendo 100% no Telegram)

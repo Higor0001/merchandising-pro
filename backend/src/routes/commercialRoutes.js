@@ -880,23 +880,56 @@ router.get('/ai/store-summary/:storeId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// --- DASHBOARD KPIs ---
+// --- DASHBOARD KPIs (projeções mínimas e contagens diretas no MongoDB) ---
 router.get('/dashboard', async (_req, res, next) => {
   try {
-    const [visits, checklists, replenishments, occurrences, priceChecks, expiries, displays, campExecs, planograms, stores, users] =
-      await Promise.all([
-        (await col('visits')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('visit_checklists')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('replenishments')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('occurrences')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('price_checks')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('expiry_checks')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('displays_exposures')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('campaign_executions')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('planogram_audits')).find({}, { projection: { _id: 0 } }).toArray(),
-        (await col('stores')).find({}).toArray(),
-        (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1, role: 1 } }).toArray(),
-      ]);
+    const [
+      visits,
+      checklistTotal,
+      checklistDone,
+      replenishments,
+      occurrences,
+      productsWithoutPrice,
+      nearExpiry,
+      extraPoints,
+      campaignsExecuted,
+      planograms,
+      stores,
+      users,
+    ] = await Promise.all([
+      (await col('visits'))
+        .find(
+          {},
+          {
+            projection: {
+              _id: 0,
+              id: 1,
+              store_id: 1,
+              promoter_id: 1,
+              scheduled_date: 1,
+              scheduled_time: 1,
+              status: 1,
+              duration_minutes: 1,
+            },
+          }
+        )
+        .toArray(),
+      (await col('visit_checklists')).countDocuments({}),
+      (await col('visit_checklists')).countDocuments({ completed: 1 }),
+      (await col('replenishments')).find({}, { projection: { _id: 0, quantity_replenished: 1 } }).toArray(),
+      (await col('occurrences'))
+        .find({}, { projection: { _id: 0, id: 1, store_id: 1, type: 1, priority: 1, status: 1, description: 1 } })
+        .toArray(),
+      (await col('price_checks')).countDocuments({ has_price_tag: 0 }),
+      (await col('expiry_checks')).countDocuments({ condition: { $in: ['Próximo Vencimento', 'Vencido'] } }),
+      (await col('displays_exposures')).countDocuments({
+        exposure_type: { $in: ['Ponto Extra', 'Ilha Promocional', 'Display', 'Ponta de Gôndola'] },
+      }),
+      (await col('campaign_executions')).countDocuments({ compliant: 1 }),
+      (await col('planogram_audits')).find({}, { projection: { _id: 0, share_of_shelf: 1 } }).toArray(),
+      (await col('stores')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+      (await col('users')).find({}, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+    ]);
 
     const storeMap = Object.fromEntries(stores.map((s) => [s.id, s.name]));
     const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
@@ -908,13 +941,8 @@ router.get('/dashboard', async (_req, res, next) => {
     const rupturesIdentified = occurrences.filter((o) => o.type === 'Ruptura').length;
     const rupturesSolved = occurrences.filter((o) => o.type === 'Ruptura' && o.status === 'Resolvida').length;
 
-    const checklistDone = checklists.filter((c) => c.completed).length;
-    const checklistPct = checklists.length ? Number(((checklistDone / checklists.length) * 100).toFixed(1)) : 0;
+    const checklistPct = checklistTotal ? Number(((checklistDone / checklistTotal) * 100).toFixed(1)) : 0;
 
-    const productsWithoutPrice = priceChecks.filter((p) => p.has_price_tag === 0).length;
-    const nearExpiry = expiries.filter((e) => e.condition === 'Próximo Vencimento' || e.condition === 'Vencido').length;
-    const extraPoints = displays.filter((d) => ['Ponto Extra', 'Ilha Promocional', 'Display', 'Ponta de Gôndola'].includes(d.exposure_type)).length;
-    const campaignsExecuted = campExecs.filter((c) => c.compliant === 1).length;
     const shareOfShelf = planograms.length
       ? Number((planograms.reduce((acc, p) => acc + Number(p.share_of_shelf || 0), 0) / planograms.length).toFixed(1))
       : 0;

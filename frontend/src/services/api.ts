@@ -12,6 +12,27 @@ import {
 export type { OfflineFormFile, OfflineQueueItem };
 
 const PERMANENT_HTTP_ERRORS = new Set([400, 403, 404, 409, 422]);
+const memoryApiCache = new Map<string, any>();
+const inFlightGets = new Map<string, Promise<any>>();
+
+/**
+ * Lê instantaneamente o último snapshot salvo (memória -> IndexedDB) para pintura imediata (Stale-While-Revalidate).
+ */
+export async function readCachedApi<T = any>(path: string): Promise<T | null> {
+  const url = path.startsWith('/api') ? path : `/api${path}`;
+  if (memoryApiCache.has(url)) {
+    return memoryApiCache.get(url) as T;
+  }
+  const idbVal = await getApiCache<T>(url);
+  if (idbVal !== null) {
+    memoryApiCache.set(url, idbVal);
+  }
+  return idbVal;
+}
+
+export function clearMemoryApiCache(): void {
+  memoryApiCache.clear();
+}
 
 export async function getOfflineQueueSummary(): Promise<{
   pending: number;
@@ -141,68 +162,95 @@ export async function apiFetch<T = any>(path: string, options: RequestInit = {})
     ...((options.headers as Record<string, string>) || {}),
   };
 
-  try {
-    const res = await fetch(url, { ...options, method, headers });
-    if (res.status === 401) {
-      localStorage.removeItem('merchpro_token');
-      localStorage.removeItem('merchpro_user');
-      window.dispatchEvent(new Event('auth-expired'));
-    }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || `Erro ${res.status}`);
-    }
-    if (method === 'GET') {
-      void setApiCache(url, data);
-    }
-    return data as T;
-  } catch (err: any) {
-    // Offline fallback for GET via IndexedDB
-    if (method === 'GET') {
-      const cached = await getApiCache<T>(url);
-      if (cached !== null) return cached;
-    }
-    // Offline queue for JSON mutations & FormData (photos/evidences) stored as native Blobs in IndexedDB
-    if (!navigator.onLine && method !== 'GET') {
-      if (isFormData && options.body instanceof FormData) {
-        const formFields: Array<{ key: string; value: string }> = [];
-        const formFiles: OfflineFormFile[] = [];
-        for (const [k, v] of options.body.entries()) {
-          if (v instanceof File) {
-            formFiles.push({
-              field: k,
-              name: v.name || 'photo.jpg',
-              type: v.type || 'image/jpeg',
-              blob: v,
-            });
-          } else {
-            formFields.push({ key: k, value: String(v) });
-          }
-        }
-        await enqueueOfflineItem({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          url,
-          method,
-          body: null,
-          formFields,
-          formFiles,
-          status: 'pending',
-          attempts: 0,
-          createdAt: new Date().toISOString(),
-        });
-      } else {
-        await enqueueOfflineItem({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          url,
-          method,
-          body: typeof options.body === 'string' ? options.body : null,
-          status: 'pending',
-          attempts: 0,
-          createdAt: new Date().toISOString(),
-        });
+  const execRequest = async (): Promise<T> => {
+    try {
+      const fetchInit: RequestInit = { ...options, method, headers };
+      if (!fetchInit.signal && method === 'GET' && typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+        fetchInit.signal = AbortSignal.timeout(20000);
       }
-      return { offlineQueued: true } as T;
+      const res = await fetch(url, fetchInit);
+      if (res.status === 401) {
+        localStorage.removeItem('merchpro_token');
+        localStorage.removeItem('merchpro_user');
+        memoryApiCache.clear();
+        window.dispatchEvent(new Event('auth-expired'));
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Erro ${res.status}`);
+      }
+      if (method === 'GET') {
+        memoryApiCache.set(url, data);
+        void setApiCache(url, data);
+      } else {
+        memoryApiCache.clear();
+      }
+      return data as T;
+    } catch (err: any) {
+      // Offline fallback for GET via memória / IndexedDB
+      if (method === 'GET') {
+        if (memoryApiCache.has(url)) return memoryApiCache.get(url) as T;
+        const cached = await getApiCache<T>(url);
+        if (cached !== null) {
+          memoryApiCache.set(url, cached);
+          return cached;
+        }
+      }
+      // Offline queue for JSON mutations & FormData (photos/evidences) stored as native Blobs in IndexedDB
+      if (!navigator.onLine && method !== 'GET') {
+        if (isFormData && options.body instanceof FormData) {
+          const formFields: Array<{ key: string; value: string }> = [];
+          const formFiles: OfflineFormFile[] = [];
+          for (const [k, v] of options.body.entries()) {
+            if (v instanceof File) {
+              formFiles.push({
+                field: k,
+                name: v.name || 'photo.jpg',
+                type: v.type || 'image/jpeg',
+                blob: v,
+              });
+            } else {
+              formFields.push({ key: k, value: String(v) });
+            }
+          }
+          await enqueueOfflineItem({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            url,
+            method,
+            body: null,
+            formFields,
+            formFiles,
+            status: 'pending',
+            attempts: 0,
+            createdAt: new Date().toISOString(),
+          });
+        } else {
+          await enqueueOfflineItem({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            url,
+            method,
+            body: typeof options.body === 'string' ? options.body : null,
+            status: 'pending',
+            attempts: 0,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return { offlineQueued: true } as T;
+      }
+      throw err;
     }
-    throw err;
+  };
+
+  // Deduplicação de GET simultâneos para o mesmo endpoint
+  if (method === 'GET' && !options.signal) {
+    const existing = inFlightGets.get(url);
+    if (existing) return existing as Promise<T>;
+    const promise = execRequest().finally(() => {
+      inFlightGets.delete(url);
+    });
+    inFlightGets.set(url, promise);
+    return promise;
   }
+
+  return execRequest();
 }

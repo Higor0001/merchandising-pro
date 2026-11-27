@@ -16,7 +16,7 @@ import {
   Search,
   Filter,
 } from 'lucide-react';
-import { apiFetch } from '../services/api';
+import { apiFetch, readCachedApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { PhotoInput } from '../components/PhotoInput';
@@ -123,12 +123,19 @@ export const VisitsAndRoutesPage: React.FC<{
   }, [mode, dateMode, singleDate, startDate, endDate]);
 
   const loadVisitsOnly = useCallback(async () => {
-    setLoadingVisits(true);
+    const endpoint = buildVisitsEndpoint();
+    const cached = await readCachedApi<any[]>(endpoint);
+    if (Array.isArray(cached)) {
+      setVisits(cached);
+      setLoadingVisits(false);
+    } else {
+      setLoadingVisits(true);
+    }
     try {
-      const v = await apiFetch<any[]>(buildVisitsEndpoint());
+      const v = await apiFetch<any[]>(endpoint);
       setVisits(Array.isArray(v) ? v : []);
     } catch (err: any) {
-      toast('err', err.message || 'Erro ao carregar visitas.');
+      if (!cached) toast('err', err.message || 'Erro ao carregar visitas.');
     } finally {
       setLoadingVisits(false);
     }
